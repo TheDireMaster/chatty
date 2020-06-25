@@ -129,8 +129,7 @@ public class Channels {
      */
     public void setChannelHighlighted(Channel channel) {
         if (getActiveTab() != channel) {
-            tabs.setForegroundForComponent(channel, LaF.isDarkTheme() ?
-                    MainGui.COLOR_NEW_HIGHLIGHTED_MESSAGE_DARK : MainGui.COLOR_NEW_HIGHLIGHTED_MESSAGE);
+            tabs.setForegroundForComponent(channel, LaF.getTabForegroundHighlight());
             highlighted.add(channel);
         }
     }
@@ -143,8 +142,7 @@ public class Channels {
      */
     public void setChannelNewMessage(Channel channel) {
         if (getActiveTab() != channel && !highlighted.contains(channel)) {
-            tabs.setForegroundForComponent(channel, LaF.isDarkTheme() ?
-                    MainGui.COLOR_NEW_MESSAGE_DARK : MainGui.COLOR_NEW_MESSAGE);
+            tabs.setForegroundForComponent(channel, LaF.getTabForegroundUnread());
         }
     }
     
@@ -191,8 +189,15 @@ public class Channels {
         tabs.addTab(defaultChannel);
     }
     
+    /**
+     * 
+     * @param room Must not be null
+     * @param type
+     * @return 
+     */
     private Channel createChannel(Room room, Channel.Type type) {
         Channel channel = new Channel(room,type,gui,styleManager, contextMenuListener);
+        channel.init();
         channel.setUserlistWidth(defaultUserlistWidth, minUserlistWidth);
         channel.setMouseClickedListener(mouseClickedListener);
         channel.setScrollbarAlways(chatScrollbarAlaways);
@@ -214,6 +219,21 @@ public class Channels {
     }
     
     public Collection<Channel> channels() {
+        return channels.values();
+    }
+    
+    /**
+     * Includes the defaultChannel that is there when no actual channel has been
+     * added yet.
+     * 
+     * @return 
+     */
+    public Collection<Channel> allChannels() {
+        if (channels.isEmpty() && defaultChannel != null) {
+            Collection<Channel> result = new ArrayList<>();
+            result.add(defaultChannel);
+            return result;
+        }
         return channels.values();
     }
     
@@ -272,7 +292,7 @@ public class Channels {
      * Gets the Channel object for the given channel name. If none exists, the
      * channel is automatically added.
      * 
-     * @param channel
+     * @param room Must not be null, but can be Room.EMPTY
      * @param type
      * @return 
      */

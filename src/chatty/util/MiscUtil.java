@@ -3,9 +3,14 @@ package chatty.util;
 
 import java.awt.Component;
 import java.awt.Desktop;
+import java.awt.Graphics;
+import java.awt.Image;
 import java.awt.Toolkit;
 import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.StringSelection;
+import java.awt.geom.AffineTransform;
+import java.awt.image.AffineTransformOp;
+import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -14,8 +19,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 import javax.swing.JOptionPane;
 
@@ -48,6 +59,31 @@ public class MiscUtil {
             return false;
         }
         return true;
+    }
+    
+    public static boolean openFile(String path, Component parent) {
+        try {
+            File file = new File(path);
+            Desktop.getDesktop().open(file);
+        } catch (Exception ex) {
+            if (parent != null) {
+                JOptionPane.showMessageDialog(parent, "Opening folder failed.\n"+ex.getLocalizedMessage());
+            }
+            return false;
+        }
+        return true;
+    }
+    
+    public static boolean openFilePrompt(String path, Component parent) {
+        int chosenOption = JOptionPane.showOptionDialog(parent,
+                path,
+                "Open in default application?",
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.QUESTION_MESSAGE, null, new String[]{"Open File", "Cancel"}, 0);
+        if (chosenOption == 0) {
+            return openFile(path, parent);
+        }
+        return false;
     }
     
     /**
@@ -172,4 +208,84 @@ public class MiscUtil {
         String os = System.getProperty("os.name");
         return os.startsWith(check);
     }
+    
+    /**
+     * Returns System.nanoTime() as milliseconds and can thus only be used to
+     * compare two values to eachother to get elapsed time that is not dependent
+     * on system clock time.
+     * 
+     * @return Some elapsed time in milliseconds
+     */
+    public static long ems() {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime());
+    }
+    
+    public static boolean biton(int value, int i) {
+        return (value & (1 << i)) != 0;
+    }
+
+    public static Image rotateImage(Image image) {
+        BufferedImage bi;
+        if (image instanceof BufferedImage) {
+            bi = (BufferedImage)image;
+        } else {
+            bi = new BufferedImage(image.getWidth(null), image.getHeight(null), BufferedImage.TYPE_INT_ARGB);
+            Graphics g = bi.createGraphics();
+            g.drawImage(image, 0, 0, null);
+            g.dispose();
+        }
+        AffineTransform tx;
+        AffineTransformOp op;
+        tx = AffineTransform.getScaleInstance(-1, -1);
+        tx.translate(-image.getWidth(null), -image.getHeight(null));
+        op = new AffineTransformOp(tx, AffineTransformOp.TYPE_NEAREST_NEIGHBOR);
+        return op.filter(bi, null);
+    }
+    
+    /**
+     * Split up a set into several sets, so that each one only has at most limit
+     * entries.
+     * 
+     * @param <T>
+     * @param original The input, will not be modified
+     * @param limit The limit (limits smaller than 1 will be turned into 1)
+     * @return A list of sets
+     */
+    public static <T> List<Set<T>> splitSetByLimit(Set<T> original, int limit) {
+        if (limit <= 0) {
+            limit = 1;
+        }
+        List<Set<T>> result = new ArrayList<>();
+        Iterator<T> it = original.iterator();
+        while (it.hasNext()) {
+            Set<T> part = new HashSet<>();
+            for (int i=0;i<limit;i++) {
+                if (!it.hasNext()) {
+                    break;
+                }
+                part.add(it.next());
+            }
+            result.add(part);
+        }
+        return result;
+    }
+    
+    /**
+     * Add items from the source Set to the target Set until the target contains
+     * limit entries or the source is exhausted.
+     * 
+     * @param <T>
+     * @param source The Set to take items from (only read), must be non-null
+     * @param target The Set to add items to, must be non-null
+     * @param limit The amount of items that are at most allowed to be in target
+     */
+    public static <T> void addLimited(Set<T> source, Set<T> target, int limit) {
+        for (T item : source) {
+            if (target.size() >= limit) {
+                return;
+            }
+            target.add(item);
+        }
+    }
+    
 }

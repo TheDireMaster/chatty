@@ -128,6 +128,13 @@ public class Debugging {
         }
     }
     
+    public static void edtLoud() {
+        if (!SwingUtilities.isEventDispatchThread()) {
+            StackTraceElement[] st = Thread.currentThread().getStackTrace();
+            LOGGER.warning("!EDT "+StringUtil.join(st));
+        }
+    }
+    
     /**
      * Get the amount of milliseconds that have passed since the last time this
      * was called with the given id. The time is updated every time this is
@@ -205,6 +212,11 @@ public class Debugging {
             LOGGER.warning("Error occured trying to get stacktrace: "+ex2);
         }
         return null;
+    }
+    
+    public static String getStacktrace() {
+        StackTraceElement[] st = Thread.currentThread().getStackTrace();
+        return StringUtil.join(st);
     }
     
     // For testing

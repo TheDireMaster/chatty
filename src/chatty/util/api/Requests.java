@@ -105,7 +105,7 @@ public class Requests {
         if (nextUrl != null) {
             url = nextUrl;
         } else {
-            url = "https://api.twitch.tv/kraken/streams/followed?limit="
+            url = "https://api.twitch.tv/kraken/streams/followed?stream_type=all&limit="
                     + StreamInfoManager.FOLLOWED_STREAMS_LIMIT + "&offset=0";
         }
         TwitchApiRequest request = new TwitchApiRequest(url, "v5");
@@ -131,9 +131,15 @@ public class Requests {
     }
     
     private void requestStreamInfoById(String stream, String userId) {
-        String url = "https://api.twitch.tv/kraken/streams/"+userId;
+        /**
+         * Switched to /streams?channel= request since it didn't have the
+         * viewercount bug with stream_type=all. Added stream_type=all since
+         * live VODs weren't contained anymore.
+         */
+        String url = "https://api.twitch.tv/kraken/streams/?channel="+userId+"&stream_type=all";
         if (attemptRequest(url)) {
             TwitchApiRequest request = new TwitchApiRequest(url, "v5");
+            request.setToken(api.getToken());
             execute(request, r -> {
                 api.streamInfoManager.requestResult(r.text, r.responseCode, stream);
             });
@@ -152,9 +158,10 @@ public class Requests {
     
     private void requestStreamsInfoById(Collection<String> ids, Set<StreamInfo> expected) {
         String streamsString = StringUtil.join(ids, ",");
-        String url = "https://api.twitch.tv/kraken/streams?offset=0&limit=100&channel=" + streamsString;
+        String url = "https://api.twitch.tv/kraken/streams?stream_type=all&offset=0&limit=100&channel=" + streamsString;
         //url = "http://127.0.0.1/twitch/streams";
         TwitchApiRequest request = new TwitchApiRequest(url, "v5");
+        request.setToken(api.getToken());
         execute(request, r -> {
             api.streamInfoManager.requestResultStreams(r.text, r.responseCode, expected);
         });
@@ -503,19 +510,6 @@ public class Requests {
     // Chat / Emoticons
     //=================
     
-    public void requestChatInfo(String stream) {
-        if (!Helper.isValidStream(stream)) {
-            return;
-        }
-        String url = "https://api.twitch.tv/api/channels/"+stream+"/chat_properties";
-        if (attemptRequest(url)) {
-            TwitchApiRequest request = new TwitchApiRequest(url, null);
-            execute(request, r -> {
-                listener.receivedChatInfo(ChatInfo.decode(stream, r.text));
-            });
-        }
-    }
-    
     protected void requestGlobalBadges() {
         String url = "https://badges.twitch.tv/v1/badges/global/display?language=en";
         if (attemptRequest(url)) {
@@ -536,34 +530,14 @@ public class Requests {
         }
     }
     
-    /**
-     * Request to get the emoticons list from the API. If the list is already
-     * available in a local file and is recent, that one is used. Otherwise
-     * a request is issued and the emoticons are received and parsed when that
-     * request is answered.
-     *
-     * @param forcedUpdate
-     */
-    public void requestEmoticons(boolean forcedUpdate) {
-            String url = "https://api.twitch.tv/kraken/chat/emoticon_images";
-            //url = "http://127.0.0.1/twitch/emoticons";
-            if (attemptRequest(url)) {
-                TwitchApiRequest request = new TwitchApiRequest(url, "v5");
-                execute(request, r -> {
-                    api.emoticonManager.dataReceived(r.text, forcedUpdate);
-                });
-            }
-            //requestResult(REQUEST_TYPE_EMOTICONS,"")
-    }
-    
-    public void requestEmotesets(Set<Integer> emotesets) {
+    public void requestEmotesets(Set<String> emotesets) {
         if (emotesets != null && !emotesets.isEmpty()) {
             String emotesetsParam = StringUtil.join(emotesets, ",");
             String url = "https://api.twitch.tv/kraken/chat/emoticon_images?emotesets="+emotesetsParam;
             if (attemptRequest(url)) {
                 TwitchApiRequest request = new TwitchApiRequest(url, "v5");
                 execute(request, r -> {
-                    Set<Emoticon> result = EmoticonManager.parseEmoticonSets(r.text);
+                    EmoticonUpdate result = EmoticonParsing.parseEmoticonSets(r.text, EmoticonUpdate.Source.OTHER);
                     if (result != null) {
                         listener.receivedEmoticons(result);
                     } else {
@@ -575,35 +549,37 @@ public class Requests {
         
             //requestResult(REQUEST_TYPE_EMOTICONS,"")
     }
-
-    public void requestCheerEmoticons(boolean forcedUpdate) {
-        String url = "https://api.twitch.tv/kraken/bits/actions";
+    
+    public void requestUserEmotes(String userId) {
+        String url = "https://api.twitch.tv/kraken/users/"+userId+"/emotes";
         if (attemptRequest(url)) {
             TwitchApiRequest request = new TwitchApiRequest(url, "v5");
+            request.setToken(api.defaultToken);
             execute(request, r -> {
-                api.cheersManager.dataReceived(r.text, forcedUpdate);
+                EmoticonUpdate result = EmoticonParsing.parseEmoticonSets(r.text, EmoticonUpdate.Source.USER_EMOTES);
+                if (result != null) {
+                    listener.receivedEmoticons(result);
+                    api.setReceived("userEmotes");
+                    if (result.setsToRemove != null) {
+                        api.emoticonManager2.addRequested(result.setsToRemove);
+                    }
+                }
+                else if (r.responseCode == 404) {
+                    api.setNotFound("userEmotes");
+                }
+                else {
+                    api.setError("userEmotes");
+                }
             });
         }
     }
     
     public void requestCheerEmoticons(String channelId, String stream) {
-        String url = "https://api.twitch.tv/kraken/bits/actions?channel_id="+channelId;
+        String url = "https://api.twitch.tv/kraken/bits/actions?channel_id="+channelId+"&include_sponsored=1";
         if (attemptRequest(url)) {
             TwitchApiRequest request = new TwitchApiRequest(url, "v5");
             execute(request, r -> {
                 api.cheersManager2.dataReceived(r.text, stream, channelId);
-            });
-        }
-    }
-    
-    public void requestRooms(String channelId, String stream) {
-        String url = "https://api.twitch.tv/kraken/chat/"+channelId+"/rooms";
-        if (attemptRequest(url)) {
-            TwitchApiRequest request = new TwitchApiRequest(url, "v5");
-            request.setToken(api.defaultToken);
-            execute(request, r -> {
-                RoomsInfo result = Parsing.parseRoomsInfo(stream, r.text);
-                listener.roomsInfo(result);
             });
         }
     }

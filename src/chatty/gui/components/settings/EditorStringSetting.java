@@ -3,6 +3,7 @@ package chatty.gui.components.settings;
 
 import chatty.gui.GuiUtil;
 import chatty.gui.components.LinkLabelListener;
+import chatty.lang.Language;
 import java.awt.BorderLayout;
 import java.awt.Window;
 import java.awt.event.ActionEvent;
@@ -20,7 +21,7 @@ import javax.swing.event.ChangeListener;
  */
 public class EditorStringSetting extends JPanel implements StringSetting {
 
-    private final Editor editor;
+    private final StringEditor editor;
     private final JTextField preview;
     private final JButton editButton;
     
@@ -36,18 +37,26 @@ public class EditorStringSetting extends JPanel implements StringSetting {
     public EditorStringSetting(Window parent, final String title, int size,
             boolean allowEmpty, boolean allowLinebreaks, String defaultInfo,
             Editor.Tester tester) {
-        setLayout(new BorderLayout(2, 0));
+        this(parent, title, size, createEditor(parent, allowEmpty, allowLinebreaks, tester));
         this.info = defaultInfo;
-        
-        editor = new Editor(parent);
+    }
+    
+    private static Editor createEditor(Window parent, boolean allowEmpty,
+                                       boolean allowLinebreaks, Editor.Tester tester) {
+        Editor editor = new Editor(parent);
         editor.setAllowEmpty(allowEmpty);
         editor.setAllowLinebreaks(allowLinebreaks);
         editor.setTester(tester);
+        return editor;
+    }
+    
+    public EditorStringSetting(Window parent, final String title, int size,
+                               StringEditor editor) {
+        this.editor = editor;
         
-        preview = new JTextField(size);
-        preview.setEditable(false);
+        setLayout(new BorderLayout(2, 0));
         
-        editButton = new JButton("Edit");
+        editButton = new JButton(Language.getString("dialog.button.edit"));
         editButton.setMargin(GuiUtil.SMALL_BUTTON_INSETS);
         editButton.addActionListener(new ActionListener() {
 
@@ -60,12 +69,15 @@ public class EditorStringSetting extends JPanel implements StringSetting {
             }
         });
         
-        add(preview, BorderLayout.CENTER);
+        if (size > -1) {
+            preview = new JTextField(size);
+            preview.setEditable(false);
+            add(preview, BorderLayout.CENTER);
+        }
+        else {
+            preview = null;
+        }
         add(editButton, BorderLayout.EAST);
-    }
-    
-    public void setFormatter(DataFormatter<String> formatter) {
-        editor.setFormatter(formatter);
     }
     
     public void setChangeListener(ChangeListener listener) {
@@ -90,7 +102,9 @@ public class EditorStringSetting extends JPanel implements StringSetting {
     public void setSettingValue(String value) {
         if (!Objects.equals(this.value, value)) {
             this.value = value;
-            preview.setText(value);
+            if (preview != null) {
+                preview.setText(value);
+            }
             if (listener != null) {
                 listener.stateChanged(new ChangeEvent(this));
             }

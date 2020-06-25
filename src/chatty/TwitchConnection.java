@@ -8,6 +8,7 @@ import chatty.ChannelStateManager.ChannelStateListener;
 import chatty.util.BotNameManager;
 import chatty.util.irc.MsgTags;
 import chatty.util.StringUtil;
+import chatty.util.api.Emoticons;
 import chatty.util.settings.Settings;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -30,7 +31,7 @@ import java.util.logging.Logger;
 public class TwitchConnection {
     
     public enum JoinError {
-        NOT_REGISTERED, ALREADY_JOINED, INVALID_NAME
+        NOT_REGISTERED, ALREADY_JOINED, INVALID_NAME, ROOM
     }
     
     private static final Logger LOGGER = Logger.getLogger(TwitchConnection.class.getName());
@@ -51,14 +52,14 @@ public class TwitchConnection {
     /**
      * How many times to try to reconnect
      */
-    private long maxReconnectionAttempts = 40;
+    private long maxReconnectionAttempts = -1;
     
     /**
      * The time in seconds between reconnection attempts. The first entry is the
      * time for the first attempt, second entry for the second attempt and so
      * on. The last entry is used for all further attempts.
      */
-    private final static int[] RECONNECTION_DELAY = new int[]{1, 5, 5, 10, 10, 60};
+    private final static int[] RECONNECTION_DELAY = new int[]{1, 5, 5, 10, 10, 60, 120};
 
     private volatile Timer reconnectionTimer;
 
@@ -204,6 +205,19 @@ public class TwitchConnection {
         }
     }
     
+    public Set<Room> getOpenRooms() {
+        Set<String> chans = getOpenChannels();
+        Set<Room> result = new HashSet<>();
+        for (String chan : chans) {
+            result.add(rooms.getRoom(chan));
+        }
+        return result;
+    }
+    
+    public Room getRoomByChannel(String channel) {
+        return rooms.getRoom(channel);
+    }
+    
     /**
      * Gets the reconnection delay based on the number of attempts.
      * 
@@ -259,6 +273,13 @@ public class TwitchConnection {
     
     public void setAllOffline() {
         users.setAllOffline();
+    }
+    
+    public void rejoinChannel(String channel) {
+        if (onChannel(channel)) {
+            irc.rejoinChannel.add(channel);
+            partChannel(channel);
+        }
     }
     
     public void partChannel(String channel) {
@@ -519,16 +540,22 @@ public class TwitchConnection {
     public void joinChannels(Set<String> channels) {
         Set<String> valid = new LinkedHashSet<>();
         Set<String> invalid = new LinkedHashSet<>();
+        Set<String> rooms = new LinkedHashSet<>();
         for (String channel : channels) {
             String checkedChannel = Helper.toValidChannel(channel);
             if (checkedChannel == null) {
                 invalid.add(channel);
+            } else if (checkedChannel.startsWith("#chatrooms:")) {
+                rooms.add(channel);
             } else {
                 valid.add(checkedChannel);
             }
         }
         for (String channel : invalid) {
             listener.onJoinError(channels, channel, JoinError.INVALID_NAME);
+        }
+        for (String channel : rooms) {
+            listener.onJoinError(channels, channel, JoinError.ROOM);
         }
         joinValidChannels(valid);
     }
@@ -566,11 +593,6 @@ public class TwitchConnection {
          * fully established (registered).
          */
         private int connectionAttempts = 0;
-        
-        /**
-         * At what time this connection last attempted to connect.
-         */
-        private long lastConnectionAttempt;
 
         private final JoinChecker joinChecker = new JoinChecker(this);
         
@@ -578,8 +600,9 @@ public class TwitchConnection {
          * Channels that this connection has joined. This is per connection, so
          * the main and secondary connection have different data here.
          */
-        private final Set<String> joinedChannels = Collections.synchronizedSet(
-                new HashSet<String>());
+        private final Set<String> joinedChannels = Collections.synchronizedSet(new HashSet<>());
+        
+        private final Set<String> rejoinChannel = Collections.synchronizedSet(new HashSet<>());
         
         /**
          * The prefix used for debug messages, so it can be determined which
@@ -600,10 +623,6 @@ public class TwitchConnection {
         public IrcConnection(String id) {
             super(id);
             this.idPrefix= "["+id+"] ";
-        }
-        
-        public int getLastConnectionAttemptAgo() {
-            return (int)((System.currentTimeMillis() - lastConnectionAttempt) / 1000);
         }
         
         public Set<String> getJoinedChannels() {
@@ -658,7 +677,6 @@ public class TwitchConnection {
         @Override
         void onConnectionAttempt(String server, int port, boolean secured) {
             connectionAttempts++;
-            lastConnectionAttempt = System.currentTimeMillis();
             if (this != irc) {
                 return;
             }
@@ -811,6 +829,7 @@ public class TwitchConnection {
                 return;
             }
             if (nick.equalsIgnoreCase(username)) {
+                boolean rejoin = false;
                 /**
                  * Local User Leaving Channel
                  */
@@ -820,12 +839,19 @@ public class TwitchConnection {
                 }
                 joinedChannels.remove(channel);
                 if (this == irc) {
-                    twitchCommands.clearModsAlreadyRequested(channel);
-                    // Remove users for this channel, clearing the userlist in the
-                    // GUI shouldn't be necessary if this channel is closed since
-                    // the GUI userlist is removed as well.
-                    users.clear(channel);
-                    listener.onChannelLeft(rooms.getRoom(channel));
+                    if (rejoinChannel.contains(channel)) {
+                        rejoinChannel.remove(channel);
+                        listener.onChannelLeft(rooms.getRoom(channel), false);
+                        rejoin = true;
+                    }
+                    else {
+                        twitchCommands.clearModsAlreadyRequested(channel);
+                        // Remove users for this channel, clearing the userlist in the
+                        // GUI shouldn't be necessary if this channel is closed since
+                        // the GUI userlist is removed as well.
+                        users.clear(channel);
+                        listener.onChannelLeft(rooms.getRoom(channel), true);
+                    }
                     channelStates.reset(channel);
                 }
                 // Leaving the channel on the userlist connection means
@@ -833,6 +859,9 @@ public class TwitchConnection {
                 // this channel.
                 userlistReceived.remove(channel);
                 debug("PARTED: "+channel);
+                if (rejoin) {
+                    joinChannel(channel);
+                }
             } else {
                 if (isChannelOpen(channel)) {
                     User user = userOffline(channel, nick);
@@ -906,29 +935,38 @@ public class TwitchConnection {
             if (user.setTurbo(turbo)) {
                 changed = true;
             }
-            if (user.setSubscriber(tags.isTrue("subscriber"))) {
+            boolean subscriber = badges.containsKey("subscriber") || badges.containsKey("founder");
+            if (user.setSubscriber(subscriber)) {
                 changed = true;
             }
-            boolean vip = badges.containsKey("vip");
-            if (user.setVip(vip)) {
+            if (user.setVip(badges.containsKey("vip"))) {
+                changed = true;
+            }
+            if (user.setModerator(badges.containsKey("moderator"))) {
+                changed = true;
+            }
+            if (user.setAdmin(badges.containsKey("admin"))) {
+                changed = true;
+            }
+            if (user.setStaff(badges.containsKey("staff"))) {
                 changed = true;
             }
             
             // Temporarily check both for containing a value as Twitch is
             // changing it
-            String userType = tags.get("user-type");
-            if (user.setModerator("mod".equals(userType))) {
-                changed = true;
-            }
-            if (user.setStaff("staff".equals(userType))) {
-                changed = true;
-            }
-            if (user.setAdmin("admin".equals(userType))) {
-                changed = true;
-            }
-            if (user.setGlobalMod("global_mod".equals(userType))) {
-                changed = true;
-            }
+//            String userType = tags.get("user-type");
+//            if (user.setModerator("mod".equals(userType))) {
+//                changed = true;
+//            }
+//            if (user.setStaff("staff".equals(userType))) {
+//                changed = true;
+//            }
+//            if (user.setAdmin("admin".equals(userType))) {
+//                changed = true;
+//            }
+//            if (user.setGlobalMod("global_mod".equals(userType))) {
+//                changed = true;
+//            }
             
             user.setId(tags.get("user-id"));
             
@@ -955,13 +993,10 @@ public class TwitchConnection {
                 } else {
                     User user = userJoined(channel, nick);
                     updateUserFromTags(user, tags);
-                    String emotesTag = tags.get("emotes");
-                    String id = tags.get("id");
-                    int bits = tags.getInteger("bits", 0);
                     if (!user.getName().equals(username) || !sentMessages.shouldHide(channel, text)) {
                         // Don't show if own name and message was sent recently,
                         // to prevent echo message from being shown in chatrooms
-                        listener.onChannelMessage(user, text, action, emotesTag, id, bits);
+                        listener.onChannelMessage(user, text, action, tags);
                     }
                 }
             }
@@ -1024,7 +1059,7 @@ public class TwitchConnection {
                 }
                 if (outputDirectly) {
                     flush();
-                    listener.onSubscriberNotification(user, text, message, months, emotes);
+                    listener.onSubscriberNotification(user, text, message, months, tags);
                     return;
                 }
                 if (gifter != user || !subPlan.equals(plan)) {
@@ -1096,7 +1131,6 @@ public class TwitchConnection {
             }
             String login = tags.get("login");
             String text = StringUtil.removeLinebreakCharacters(tags.get("system-msg"));
-            String emotes = tags.get("emotes");
             int months = tags.getInteger("msg-param-cumulative-months", -1);
             if (months == -1) {
                 months = tags.getInteger("msg-param-months", -1);
@@ -1110,25 +1144,25 @@ public class TwitchConnection {
                 if (months > 1 && !text.matches(".*\\b"+months+"\\b.*")) {
                     text += " They've subscribed for "+months+" months!";
                 }
-                listener.onSubscriberNotification(user, text, message, months, emotes);
+                listener.onSubscriberNotification(user, text, message, months, tags);
             } else if (tags.isValue("msg-id", "charity") && login.equals("twitch")) {
-                listener.onUsernotice("Charity", user, text, message, emotes);
+                listener.onUsernotice("Charity", user, text, message, tags);
             } else if (tags.isValue("msg-id", "raid")) {
-                listener.onUsernotice("Raid", user, text, message, emotes);
+                listener.onUsernotice("Raid", user, text, message, tags);
             } else if (text.equals("reward") && !message.isEmpty()) {
                 // For Bits reward text has "reward" and message what should be in text
-                listener.onUsernotice("Usernotice", user, message, null, emotes);
+                listener.onUsernotice("Usernotice", user, message, null, tags);
             } else if (tags.isValueOf("msg-id", "bitsbadgetier")
                     && text.equals("bits badge tier notification")
                     && tags.hasInteger("msg-param-threshold")) {
                 text = String.format("%s just earned a new %,d Bits badge!",
                         user.getDisplayNick(),
                         tags.getInteger("msg-param-threshold", -1));
-                listener.onUsernotice("Usernotice", user, text, null, emotes);
+                listener.onUsernotice("Usernotice", user, text, null, tags);
             } else {
                 // Just output like this if unknown, since Twitch keeps adding
                 // new messages types for this
-                listener.onUsernotice("Usernotice", user, text, message, emotes);
+                listener.onUsernotice("Usernotice", user, text, message, tags);
             }
         }
 
@@ -1264,7 +1298,6 @@ public class TwitchConnection {
         }
         
         private void updateUserstate(String channel, MsgTags tags) {
-            String emotesets = tags.get("emote-sets");
             if (channel != null) {
                 /**
                  * Update state for the local user in the given channel, also
@@ -1273,7 +1306,6 @@ public class TwitchConnection {
                  */
                 User user = localUserJoined(channel);
                 updateUserFromTags(user, tags);
-                user.setEmoteSets(emotesets);
             } else {
                 /**
                  * Update all existing users with the local name, assuming that
@@ -1281,7 +1313,6 @@ public class TwitchConnection {
                  */
                 for (User user : users.getUsersByName(username)) {
                     updateUserFromTags(user, tags);
-                    user.setEmoteSets(emotesets);
                 }
             }
 
@@ -1293,14 +1324,13 @@ public class TwitchConnection {
              * 
              * This may be updated with local and global info, however only the
              * global info is used to initialize newly created local users.
-             * 
-             * The special user is also used to get the emotesets the local user
-             * has access to in other areas of the program like the Emotes
-             * Dialog.
              */
-            users.specialUser.setEmoteSets(emotesets);
-            listener.onSpecialUserUpdated();
             updateUserFromTags(users.specialUser, tags);
+            
+            //--------------------------
+            // Emotesets
+            //--------------------------
+            listener.onEmotesets(Emoticons.parseEmotesets(tags.get("emote-sets")));
         }
         
         @Override
@@ -1468,7 +1498,7 @@ public class TwitchConnection {
 
         void onChannelJoined(User user);
 
-        void onChannelLeft(Room room);
+        void onChannelLeft(Room room, boolean closeChannel);
 
         void onJoin(User user);
 
@@ -1482,7 +1512,7 @@ public class TwitchConnection {
 
         void onUserUpdated(User user);
 
-        void onChannelMessage(User user, String message, boolean action, String emotes, String id, int bits);
+        void onChannelMessage(User user, String msg, boolean action, MsgTags tags);
         
         void onWhisper(User user, String message, String emotes);
 
@@ -1526,7 +1556,7 @@ public class TwitchConnection {
 
         void onConnectionStateChanged(int state);
         
-        void onSpecialUserUpdated();
+        void onEmotesets(Set<String> emotesets);
 
         void onConnectError(String message);
         
@@ -1551,9 +1581,9 @@ public class TwitchConnection {
          * @param months The number of subscribed months (may be -1 if invalid)
          * @param emotes The emotes tag, yet to be parsed (may be null)
          */
-        void onSubscriberNotification(User user, String text, String message, int months, String emotes);
+        void onSubscriberNotification(User user, String text, String message, int months, MsgTags tags);
         
-        void onUsernotice(String type, User user, String text, String message, String emotes);
+        void onUsernotice(String type, User user, String text, String message, MsgTags tags);
         
         void onSpecialMessage(String name, String message);
         

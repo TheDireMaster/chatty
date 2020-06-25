@@ -2,6 +2,8 @@
 package chatty;
 
 import chatty.util.DateTime;
+import chatty.util.Debugging;
+import chatty.util.ElapsedTime;
 import chatty.util.LogUtil;
 import chatty.util.MiscUtil;
 import chatty.util.SingleInstance;
@@ -34,7 +36,7 @@ public class Chatty {
      * The Chatty website as it can be opened in the menu.
      */
     public static final String WEBSITE =
-            "http://chatty.github.io";
+            "https://chatty.github.io";
     
     /**
      * The Twitch client id of this program.
@@ -51,7 +53,7 @@ public class Chatty {
      * by points. May contain a single "b" for beta versions, which are counted
      * as older (so 0.8.7b4 is older than 0.8.7).
      */
-    public static final String VERSION = "0.9.6-b1"; // Remember changing the version in the help
+    public static final String VERSION = "0.12"; // Remember changing the version in the help
     
     /**
      * Enable Version Checker (if you compile and distribute this yourself, you
@@ -80,7 +82,9 @@ public class Chatty {
     /**
      * When this program was started
      */
-    public static final long STARTED_TIME = System.currentTimeMillis();
+    private static final ElapsedTime UPTIME = new ElapsedTime(true);
+    
+    private static final long STARTED_TIME = System.currentTimeMillis();
 
     /**
      * Custom Settings directory, either the current working directory if the
@@ -89,6 +93,8 @@ public class Chatty {
     private static String settingsDir = null;
     
     private static String invalidSettingsDir = null;
+    
+    private static String settingsDirInfo = null;
     
     private static String[] args;
     
@@ -119,12 +125,14 @@ public class Chatty {
         
         if (parsedArgs.containsKey("cd")) {
             settingsDir = System.getProperty("user.dir");
+            settingsDirInfo = "-cd";
         }
         if (parsedArgs.containsKey("d")) {
             String dir = parsedArgs.get("d");
             File file = new File(dir).getAbsoluteFile();
             if (file.isDirectory()) {
                 settingsDir = file.toString();
+                settingsDirInfo = "-d";
             } else {
                 invalidSettingsDir = file.toString();
             }
@@ -221,6 +229,10 @@ public class Chatty {
         return invalidSettingsDir;
     }
     
+    public static String getSettingsDirectoryInfo() {
+        return settingsDirInfo;
+    }
+    
     public static String getExportDirectory() {
         String dir = getUserDataDirectory()+"exported"+File.separator;
         new File(dir).mkdirs();
@@ -265,7 +277,26 @@ public class Chatty {
     }
     
     public static String uptime() {
-        return DateTime.ago(STARTED_TIME);
+        return DateTime.duration(UPTIME.millisElapsedSync());
+    }
+    
+    public static long uptimeMillis() {
+        return UPTIME.millisElapsedSync();
+    }
+    
+    public static long uptimeSeconds() {
+        return UPTIME.secondsElapsedSync();
+    }
+    
+    /**
+     * The time in milliseconds when Chatty was started. For uptime using one of
+     * the uptime functions is probably preferable, since they aren't influenced
+     * by system time changes.
+     *
+     * @return 
+     */
+    public static long startedTime() {
+        return STARTED_TIME;
     }
     
     public static String[] getArgs() {
@@ -278,7 +309,7 @@ public class Chatty {
      * @param output 
      */
     public static void println(String output) {
-        if (Chatty.DEBUG) {
+        if (Chatty.DEBUG || Debugging.isEnabled("println")) {
             System.out.println(output);
         }
     }

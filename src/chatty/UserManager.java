@@ -240,13 +240,13 @@ public class UserManager {
                  * message.
                  */
                 user.setAdmin(specialUser.isAdmin());
-                user.setGlobalMod(specialUser.isGlobalMod());
                 user.setStaff(specialUser.isStaff());
                 user.setTurbo(specialUser.hasTurbo());
+                user.setId(specialUser.getId());
+                user.setLocalUser(true);
                 if (!specialUser.hasDefaultColor()) {
                     user.setColor(specialUser.getPlainColor());
                 }
-                user.setEmoteSets(specialUser.getEmoteSet());
                 if (specialUser.hasDisplayNickSet()) {
                     user.setDisplayNick(specialUser.getDisplayNick());
                 }

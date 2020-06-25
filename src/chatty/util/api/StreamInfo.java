@@ -3,8 +3,10 @@ package chatty.util.api;
 
 import chatty.Helper;
 import chatty.util.DateTime;
+import chatty.util.ElapsedTime;
 import chatty.util.StringUtil;
 import chatty.util.api.StreamTagManager.StreamTag;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.logging.Logger;
@@ -37,6 +39,8 @@ public class StreamInfo {
      */
     private String display_name;
     
+    private String logo;
+    
     private String userId;
     
     /**
@@ -44,15 +48,16 @@ public class StreamInfo {
      */
     private String capitalizedName;
     
-    private long lastUpdated = 0;
-    private long lastStatusChange = 0;
-    private long lastUpdateSucceded = 0;
+    private final ElapsedTime lastUpdatedET = new ElapsedTime();
+    private final ElapsedTime lastStatusChangeET = new ElapsedTime();
+    private final ElapsedTime lastUpdateSuccededET = new ElapsedTime();
     private String status = null;
     private String game = "";
     private int viewers = 0;
     private List<StreamTag> communities;
     private long startedAt = -1;
-    private long lastOnline = -1;
+    private final ElapsedTime lastOnlineET = new ElapsedTime();
+    private long prevLastOnlineAgoSecs;
     private long startedAtWithPicnic = -1;
     private boolean online = false;
     private StreamType streamType;
@@ -98,7 +103,7 @@ public class StreamInfo {
     private String currentFullStatus;
     private String prevFullStatus;
     
-    private final LinkedHashMap<Long,StreamInfoHistoryItem> history = new LinkedHashMap<>();
+    private final LinkedHashMap<Long, StreamInfoHistoryItem> history = new LinkedHashMap<>();
     
     private int expiresAfter = 300;
     
@@ -126,7 +131,7 @@ public class StreamInfo {
     }
     
     private void streamInfoStatusChanged() {
-        lastStatusChange = System.currentTimeMillis();
+        lastStatusChangeET.set();
         if (listener != null) {
             listener.streamInfoStatusChanged(this, getFullStatus());
         }
@@ -211,16 +216,18 @@ public class StreamInfo {
             }
             recheckOffline = -1;
 
-            if (lastOnlineAgo() > MAX_PICNIC_LENGTH) {
+            if (getLastOnlineAgoSecs() > MAX_PICNIC_LENGTH
+                    || startedAtWithPicnic == -1) {
                 /**
-                 * Only update online time with PICNICs when offline time was
-                 * long enough (of course also depends on what stream data
-                 * Chatty has).
+                 * Only update (as in no more different PICNIC time from regular
+                 * uptime) when offline for long enough or previous value was
+                 * not valid.
                  */
                 this.startedAtWithPicnic = startedAt;
             }
             this.startedAt = startedAt;
-            this.lastOnline = System.currentTimeMillis();
+            this.prevLastOnlineAgoSecs = lastOnlineET.secondsElapsed();
+            this.lastOnlineET.set();
             this.online = true;
 
             if (saveToHistory) {
@@ -293,7 +300,7 @@ public class StreamInfo {
         setUpdated();
         if (succeeded) {
             updateFailedCounter = 0;
-            lastUpdateSucceded = System.currentTimeMillis();
+            lastUpdateSuccededET.set();
         } else {
             updateFailedCounter++;
             if (recheckOffline != -1) {
@@ -321,7 +328,7 @@ public class StreamInfo {
     }
     
     private void setUpdated() {
-        lastUpdated = System.currentTimeMillis() / 1000;
+        lastUpdatedET.set();
         requested = false;
     }
     
@@ -423,6 +430,14 @@ public class StreamInfo {
         return !hasDisplayName() || capitalizedName != null;
     }
     
+    public synchronized void setLogo(String logo) {
+        this.logo = logo;
+    }
+    
+    public synchronized String getLogo() {
+        return logo;
+    }
+    
     public synchronized boolean setUserId(String userId) {
         if (this.userId == null || (!this.userId.equals(userId) && userId != null)) {
             this.userId = userId;
@@ -479,6 +494,27 @@ public class StreamInfo {
         return this.online;
     }
     
+//    public boolean wasOnline() {
+//        synchronized(history) {
+//            if (history.isEmpty()) {
+//                return false;
+//            }
+//            List<Long> keys = new ArrayList<>(history.keySet());
+//            // Start at 2nd to last item, since last would be the current
+//            for (int i = keys.size() - 2; i >= 0; i++) {
+//                Long time = keys.get(i);
+//                if (System.currentTimeMillis() - time > 5*60*1000) {
+//                    return false;
+//                }
+//                StreamInfoHistoryItem item = history.get(time);
+//                if (item.isOnline()) {
+//                    return true;
+//                }
+//            }
+//        }
+//        return false;
+//    }
+    
     /**
      * The time the stream was started. As always, this may contain stale data
      * if the stream info is not valid or the stream offline.
@@ -517,15 +553,26 @@ public class StreamInfo {
      * @return The number of seconds that have passed since the stream was last
      * seen as online
      */
-    public synchronized long lastOnlineAgo() {
-        return (System.currentTimeMillis() - lastOnline) / 1000;
+    public synchronized long getLastOnlineAgoSecs() {
+        return lastOnlineET.secondsElapsed();
     }
     
     public synchronized long getLastOnlineTime() {
-        return lastOnline;
+        if (!lastOnlineET.isSet()) {
+            return -1;
+        }
+        return System.currentTimeMillis() - lastOnlineET.millisElapsed();
     }
     
-    
+    /**
+     * How many seconds ago has this stream been last seen online, from before
+     * the latest update.
+     * 
+     * @return 
+     */
+    public synchronized long getPrevLastOnlineAgoSecs() {
+        return prevLastOnlineAgoSecs;
+    }
     
     // Getters
     
@@ -574,12 +621,12 @@ public class StreamInfo {
     }
     
     /**
-     * Calculates the number of seconds that passed after the last update
+     * Calculates the number of seconds that passed since the last update.
      * 
      * @return Number of seconds that have passed after the last update
      */
     public synchronized long getUpdatedDelay() {
-        return (System.currentTimeMillis() / 1000) - lastUpdated;
+        return lastUpdatedET.secondsElapsed();
     }
     
     /**
@@ -607,7 +654,7 @@ public class StreamInfo {
     }
     
     public synchronized boolean isValidEnough() {
-        return isValid() || (System.currentTimeMillis() - lastUpdateSucceded)/1000 < expiresAfter*3;
+        return isValid() || !lastUpdateSuccededET.secondsElapsed(expiresAfter*3);
     }
     
     public synchronized boolean lastUpdateLongAgo() {
@@ -623,11 +670,7 @@ public class StreamInfo {
      * @return 
      */
     public synchronized long getStatusChangeTimeAgo() {
-        return (System.currentTimeMillis() - lastStatusChange) / 1000;
-    }
-    
-    public synchronized long getStatusChangeTime() {
-        return lastStatusChange;
+        return lastStatusChangeET.secondsElapsed();
     }
     
     @Override

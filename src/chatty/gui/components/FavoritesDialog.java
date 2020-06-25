@@ -10,6 +10,7 @@ import chatty.gui.components.menus.ContextMenu;
 import chatty.gui.components.menus.ContextMenuListener;
 import chatty.lang.Language;
 import chatty.gui.components.menus.RoomsContextMenu;
+import chatty.gui.components.menus.TextSelectionMenu;
 import chatty.util.BitEncoder;
 import chatty.util.DateTime;
 import java.awt.GridBagConstraints;
@@ -102,7 +103,8 @@ public class FavoritesDialog extends JDialog {
                 channelsChanged();
             }
         });
-        GuiUtil.installLengthLimitDocumentFilter(input, 1000, false);
+        GuiUtil.installLengthLimitDocumentFilter(input, 8000, false);
+        TextSelectionMenu.install(input);
         
         // Table
         data = new MyTableModel();
@@ -339,6 +341,12 @@ public class FavoritesDialog extends JDialog {
         data.setData(favorites.getAll());
         setVisible(true);
         return result;
+    }
+    
+    public void updateData() {
+        if (isVisible()) {
+            data.setData(favorites.getAll());
+        }
     }
     
     /**

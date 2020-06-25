@@ -1,16 +1,14 @@
 
 package chatty.util.api;
 
-import chatty.Logging;
 import chatty.util.DateTime;
+import chatty.util.ElapsedTime;
 import chatty.util.JSONUtil;
 import chatty.util.StringUtil;
 import chatty.util.api.StreamInfo.StreamType;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 import java.util.logging.Logger;
 import org.json.simple.JSONArray;
@@ -79,9 +77,9 @@ public class StreamInfoManager {
      * Stores when the streams info was last requested, so the delay can be
      * ensured.
      */
-    private long streamsInfoLastRequested = 0;
-    private long followsLastRequested = 0;
-    private long specialCheckLastDone = 0;
+    private final ElapsedTime streamsInfoRequestedET = new ElapsedTime();
+    private final ElapsedTime followsRequestedET = new ElapsedTime();
+    private final ElapsedTime specialCheckDoneET = new ElapsedTime();
     
     private int followsRequestErrors = 0;
     private String prevToken = "";
@@ -112,8 +110,8 @@ public class StreamInfoManager {
     }
     
     public synchronized void manualRefresh() {
-        followsLastRequested = 0;
-        streamsInfoLastRequested = 0;
+        followsRequestedET.reset();
+        streamsInfoRequestedET.reset();
     }
     
     public synchronized void getFollowedStreams(String token) {
@@ -123,10 +121,10 @@ public class StreamInfoManager {
         if (!prevToken.equals(token)) {
             followsRequestErrors = 0;
         }
-        if (checkTimePassed(followsLastRequested, UPDATE_FOLLOWS_DELAY,
+        if (checkTimePassed(followsRequestedET, UPDATE_FOLLOWS_DELAY,
                 followsRequestErrors)) {
             prevToken = token;
-            followsLastRequested = System.currentTimeMillis();
+            followsRequestedET.set();
             followedStreamsRequests = 1;
             api.requests.requestFollowedStreams(token, null);
         }
@@ -143,13 +141,8 @@ public class StreamInfoManager {
         }
     }
     
-    public static boolean checkTimePassed(long lastTime, int delay, int errors) {
-        long timePassed = System.currentTimeMillis() - lastTime;
-        //System.out.println(delay + errors * delay/4);
-        if (timePassed/1000 < delay + errors * delay/4) {
-            return false;
-        }
-        return true;
+    public static boolean checkTimePassed(ElapsedTime et, int delay, int errors) {
+        return et.secondsElapsed(delay + errors * delay/4);
     }
     
     /**
@@ -182,6 +175,10 @@ public class StreamInfoManager {
         return cached;
     }
     
+    public synchronized StreamInfo getCachedStreamInfo(String stream) {
+        return cachedStreamInfo.get(StringUtil.toLowerCase(stream));
+    }
+    
     /**
      * Gets a StreamInfo object for the given stream name. Either returns the
      * already existing StreamInfo object for this stream or creates a new one.
@@ -212,7 +209,7 @@ public class StreamInfoManager {
      * @param streams 
      */
     private void checkRerequest(Set<String> streams) {
-        if (!checkTimePassed(specialCheckLastDone, SPECIAL_CHECK_DELAY,
+        if (!checkTimePassed(specialCheckDoneET, SPECIAL_CHECK_DELAY,
                 streamsRequestErrors)) {
             return;
         }
@@ -227,7 +224,7 @@ public class StreamInfoManager {
      * @param streams 
      */
     private void requestStreamsInfo(Set<String> streams) {
-        if (!checkTimePassed(streamsInfoLastRequested, UPDATE_STREAMINFO_DELAY,
+        if (!checkTimePassed(streamsInfoRequestedET, UPDATE_STREAMINFO_DELAY,
                 streamsRequestErrors)) {
             return;
         }
@@ -265,11 +262,11 @@ public class StreamInfoManager {
             }
         }
         if (special) {
-            specialCheckLastDone = System.currentTimeMillis();
+            specialCheckDoneET.set();
         }
         if (!streamsForRequest.isEmpty()) {
             if (!special) {
-                streamsInfoLastRequested = System.currentTimeMillis();
+                streamsInfoRequestedET.set();
             }
             api.requests.requestStreamsInfo(streamsForRequest, streamInfosForRequest);
         }
@@ -374,23 +371,28 @@ public class StreamInfoManager {
         try {
             JSONParser parser = new JSONParser();
             JSONObject root = (JSONObject) parser.parse(json);
-
-            JSONObject stream = (JSONObject) root.get("stream");
-
-            if (stream == null) {
+            
+            /**
+             * See Requests.requestStreamInfoById().
+             */
+            JSONArray streams = (JSONArray) root.get("streams");
+            if (streams.size() == 0) {
                 streamInfo.setOffline();
-            } else {
+            }
+            else {
+                JSONObject stream = (JSONObject) streams.get(0);
+
                 StreamInfo result = parseStream(stream, false);
                 if (result == null || result != streamInfo) {
                     LOGGER.warning("Error parsing stream ("
-                            +streamInfo.getStream()+"): "+json);
+                            + streamInfo.getStream() + "): " + json);
                     streamInfo.setUpdateFailed();
                 }
             }
         }
-        catch (ParseException ex) {
+        catch (Exception ex) {
             streamInfo.setUpdateFailed();
-            LOGGER.warning("Error parsing stream info: "+ex.getLocalizedMessage());
+            LOGGER.warning("Error parsing stream info: "+ex);
         }
         
     }
@@ -463,6 +465,12 @@ public class StreamInfoManager {
             return -1;
         }
     }
+    
+    /**
+     * If uptime is greater than 10 years, it's probably not valid. Streams that
+     * just started appear to sometimes return a wrong start time.
+     */
+    private static final long VALID_UPTIME_LIMIT = 10*365*24*60*60*1000;
 
     /**
      * Parse a stream object into a StreamInfo object. This gets the name of the
@@ -488,8 +496,8 @@ public class StreamInfoManager {
         StreamType streamType;
         long timeStarted = -1;
         String userId = null;
-        List<String> community_ids;
         boolean noChannelObject = false;
+        String logo;
         try {
             // Get stream data
             viewersTemp = (Number) stream.get("viewers");
@@ -529,6 +537,7 @@ public class StreamInfoManager {
                 LOGGER.warning("Error parsing StreamInfo: no channel object ("+name+")");
                 noChannelObject = true;
             }
+            logo = JSONUtil.getString(channel, "logo");
         } catch (ClassCastException ex) {
             LOGGER.warning("Error parsing StreamInfo: unpexected type");
             return null;
@@ -546,6 +555,10 @@ public class StreamInfoManager {
         // Try to parse created_at
         try {
             timeStarted = DateTime.parseDatetime((String) stream.get("created_at"));
+            if (timeStarted + VALID_UPTIME_LIMIT < System.currentTimeMillis()) {
+                LOGGER.warning("Warning: Stream created_at for "+name+" seems invalid ("+stream.get("created_at")+")");
+                timeStarted = -1;
+            }
         } catch (Exception ex) {
             LOGGER.warning("Warning parsing StreamInfo: could not parse created_at ("+ex+")");
         }
@@ -570,6 +583,9 @@ public class StreamInfoManager {
         if (streamInfo.setUserId(userId)) {
             // If not already done, send userId to UserIDs manager
             api.setUserId(name, userId);
+        }
+        if (logo != null) {
+            streamInfo.setLogo(logo);
         }
         
         // Community (if cached, will immediately set Community correct again

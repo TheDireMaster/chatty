@@ -1,9 +1,9 @@
 
 package chatty.gui.components.userinfo;
 
+import chatty.Helper;
 import chatty.User;
 import chatty.gui.GuiUtil;
-import chatty.gui.MainGui;
 import chatty.gui.components.menus.ContextMenuAdapter;
 import chatty.gui.components.menus.ContextMenuListener;
 import chatty.gui.components.menus.UserContextMenu;
@@ -21,6 +21,7 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.text.SimpleDateFormat;
 import java.util.Objects;
 import java.util.Set;
 import javax.swing.*;
@@ -32,7 +33,7 @@ import javax.swing.*;
 public class UserInfo extends JDialog {
 
     private static final String SINGLE_MESSAGE_CHECK = "Remove only selected message";
-    
+
     public enum Action {
         NONE, TIMEOUT, MOD, UNMOD, COMMAND
     }
@@ -65,13 +66,15 @@ public class UserInfo extends JDialog {
     
     private float fontSize;
     
-    private final MainGui owner;
-   
-    public UserInfo(final MainGui owner, Settings settings,
+    private final UserInfoRequester requester;
+    
+    public UserInfo(final Window parent, UserInfoListener listener,
+            UserInfoRequester requester,
+            Settings settings,
             final ContextMenuListener contextMenuListener) {
-        super(owner);
+        super(parent);
+        this.requester = requester;
         GuiUtil.installEscapeCloseOperation(this);
-        this.owner = owner;
         banReasons = new BanReasons(this, settings);
         
         buttons = new Buttons(this, new ActionListener() {
@@ -87,8 +90,9 @@ public class UserInfo extends JDialog {
                     return;
                 }
                 
-                owner.anonCustomCommand(getUser().getRoom(), command, makeParameters());
-                owner.getActionListener().actionPerformed(e);
+                if (listener != null) {
+                    listener.anonCustomCommand(getUser().getRoom(), command, makeParameters());
+                }
             }
         });
         
@@ -105,6 +109,9 @@ public class UserInfo extends JDialog {
         
         GridBagConstraints gbc;
         
+        //==========================
+        // Top Panel
+        //==========================
         JPanel topPanel = new JPanel(new GridBagLayout());
 
         gbc = makeGbc(0,0,3,1);
@@ -116,13 +123,10 @@ public class UserInfo extends JDialog {
         gbc.anchor = GridBagConstraints.CENTER;
         singleMessage.setToolTipText("When doing a ban/timeout only remove a single message of that user [S to toggle]");
         //add(singleMessage, gbc);
-
-        gbc = makeGbc(2,1,1,1);
-        gbc.insets = new Insets(2, 8, 2, 8);
-        gbc.anchor = GridBagConstraints.EAST;
-        pinnedDialog.setToolTipText(Language.getString("userDialog.setting.pin.tip"));
-        topPanel.add(pinnedDialog, gbc);
         
+        //--------------------------
+        // Second row
+        //--------------------------
         JComboBox<String> reasons = new JComboBox<>();
         reasons.addItem("-- Select Ban/Timeout Reason --");
         reasons.addItem("No CatBag posted");
@@ -132,18 +136,32 @@ public class UserInfo extends JDialog {
         gbc.insets = new Insets(2, 8, 5, 7);
         gbc.anchor = GridBagConstraints.WEST;
         topPanel.add(banReasons, gbc);
+
+        gbc = makeGbc(2, 1, 1, 1);
+        gbc.insets = new Insets(2, 8, 2, 8);
+        gbc.anchor = GridBagConstraints.EAST;
+        pinnedDialog.setToolTipText(Language.getString("userDialog.setting.pin.tip"));
+        topPanel.add(pinnedDialog, gbc);
         
+        // Add to dialog
         gbc = makeGbc(0, 0, 3, 1);
         gbc.insets = new Insets(0, 0, 0, 0);
         add(topPanel, gbc);
         
+        //==========================
+        // Message log
+        //==========================
+        pastMessages.setRows(4);
+        pastMessages.setPreferredSize(pastMessages.getPreferredSize());
         JScrollPane scrollPane = new JScrollPane(pastMessages);
-        scrollPane.setPreferredSize(new Dimension(300,200));
+        scrollPane.setPreferredSize(scrollPane.getPreferredSize());
+        pastMessages.setRows(0);
+        pastMessages.setPreferredSize(null);
         gbc = makeGbc(0,4,3,1);
         gbc.fill = GridBagConstraints.BOTH;
         gbc.weightx = 1;
         gbc.weighty = 0.9;
-        add(scrollPane,gbc);
+        add(scrollPane, gbc);
         
         gbc = makeGbc(0,5,3,1);
         gbc.insets = new Insets(0,0,0,0);
@@ -157,13 +175,13 @@ public class UserInfo extends JDialog {
                         MiscUtil.copyToClipboard(currentUser.getId());
                         break;
                     case "sendFollowAge":
-                        owner.anonCustomCommand(getUser().getRoom(), InfoPanel.COMMAND_FOLLOW_AGE, makeParameters());
+                        listener.anonCustomCommand(getUser().getRoom(), InfoPanel.COMMAND_FOLLOW_AGE, makeParameters());
                         break;
                     case "copyFollowAge":
                         MiscUtil.copyToClipboard(InfoPanel.COMMAND_FOLLOW_AGE.replace(makeParameters()));
                         break;
                     case "sendAccountAge":
-                        owner.anonCustomCommand(getUser().getRoom(), InfoPanel.COMMAND_ACCOUNT_AGE, makeParameters());
+                        listener.anonCustomCommand(getUser().getRoom(), InfoPanel.COMMAND_ACCOUNT_AGE, makeParameters());
                         break;
                     case "copyAccountAge":
                         MiscUtil.copyToClipboard(InfoPanel.COMMAND_ACCOUNT_AGE.replace(makeParameters()));
@@ -180,6 +198,7 @@ public class UserInfo extends JDialog {
             
         });
         gbc = makeGbc(0,6,3,1);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.insets = new Insets(2, 0, 0, 0);
         add(infoPanel,gbc);
         
@@ -211,8 +230,10 @@ public class UserInfo extends JDialog {
             }
             
             private void showPopupMenu(MouseEvent e) {
-                JPopupMenu menu = new UserContextMenu(currentUser, currentMsgId, currentAutoModMsgId, contextMenuListener);
-                menu.show(e.getComponent(), e.getX(), e.getY());
+                if (contextMenuListener != null) {
+                    JPopupMenu menu = new UserContextMenu(currentUser, currentMsgId, currentAutoModMsgId, contextMenuListener);
+                    menu.show(e.getComponent(), e.getX(), e.getY());
+                }
             }
         });
       
@@ -246,14 +267,13 @@ public class UserInfo extends JDialog {
             reason = " " + reason;
         }
         Parameters parameters = Parameters.create(nick + reason);
-        parameters.put("msg-id", getMsgId());
+        Helper.addUserParameters(user, getMsgId(), getAutoModMsgId(), parameters);
+        parameters.put("reason", reason);
         parameters.put("target-msg-id", getTargetMsgId());
-        parameters.put("automod-msg-id", getAutoModMsgId());
         parameters.put("followage", infoPanel.getFollowAge());
         parameters.put("followdate", infoPanel.getFollowDate());
         parameters.put("accountage", infoPanel.getAccountAge());
         parameters.put("accountdate", infoPanel.getAccountDate());
-        parameters.put("user-id", user.getId());
         return parameters;
     }
     
@@ -293,7 +313,6 @@ public class UserInfo extends JDialog {
     public void setFontSize(float size) {
         if (size != fontSize) {
             GuiUtil.setFontSize(size, this);
-            pack();
             finishDialog();
         }
         this.fontSize = size;
@@ -313,9 +332,25 @@ public class UserInfo extends JDialog {
         // Pack because otherwise the dialog won't be sized correctly when
         // displaying it for the first time (not sure why)
         banReasons.addCustomInput();
-        pack();
+        /**
+         * TODO: Want to remove pack() because it makes the window smaller when
+         * manually sized large, however will have to test if removing it has
+         * any negative effects (which maybe could be circumvented somehow, e.g.
+         * revalidate() or something).
+         */
+//        pack();
         finishDialog();
         banReasons.removeCustomInput();
+        banReasons.updateHotkey();
+    }
+    
+    private void updateMessages() {
+        pastMessages.update(currentUser, currentMsgId != null ? currentMsgId : currentAutoModMsgId);
+    }
+    
+    public void setTimestampFormat(SimpleDateFormat timestampFormat) {
+        pastMessages.setTimestampFormat(timestampFormat);
+        updateMessages();
     }
     
     protected void finishDialog() {
@@ -346,7 +381,7 @@ public class UserInfo extends JDialog {
                 +displayNickInfo
                 +" / "+user.getRoom().getDisplayName()
                 +" "+categoriesString);
-        pastMessages.update(user, currentMsgId != null ? currentMsgId : currentAutoModMsgId);
+        updateMessages();
         infoPanel.update(user);
         singleMessage.setEnabled(currentMsgId != null);
         updateButtons();
@@ -395,6 +430,13 @@ public class UserInfo extends JDialog {
         return currentMsgId;
     }
     
+    public String getMsg() {
+        if (currentUser != null) {
+            return currentUser.getMessageText(currentMsgId);
+        }
+        return null;
+    }
+    
     public String getTargetMsgId() {
         if (singleMessage.isSelected()) {
             return currentMsgId;
@@ -426,7 +468,10 @@ public class UserInfo extends JDialog {
     }
     
     protected ChannelInfo getChannelInfo() {
-        return owner.getCachedChannelInfo(currentUser.getName(), currentUser.getId());
+        if (requester != null) {
+            return requester.getCachedChannelInfo(currentUser.getName(), currentUser.getId());
+        }
+        return null;
     }
 
     public void setFollowInfo(String stream, String user, Follower follow, TwitchApi.RequestResultCode result) {
@@ -438,10 +483,13 @@ public class UserInfo extends JDialog {
     }
 
     protected Follower getFollowInfo(boolean refresh) {
-        return owner.getSingleFollower(currentUser.getStream(),
-                currentUser.getRoom().getStreamId(),
-                currentUser.getName(),
-                currentUser.getId(),
-                refresh);
+        if (requester != null) {
+            return requester.getSingleFollower(currentUser.getStream(),
+                    currentUser.getRoom().getStreamId(),
+                    currentUser.getName(),
+                    currentUser.getId(),
+                    refresh);
+        }
+        return null;
     }
 }

@@ -1,14 +1,22 @@
 
 package chatty.util;
 
+import java.text.DateFormatSymbols;
 import java.text.SimpleDateFormat;
+import java.time.Month;
+import java.time.MonthDay;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.Random;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Stuff to do with dates/time.
@@ -84,10 +92,15 @@ public class DateTime {
     }
     
     public static String formatAccountAgeCompact(long time) {
+        return formatAccountAgeCompact(time, false);
+    }
+    
+    public static String formatAccountAgeCompact(long time, boolean moreCompact) {
+        Formatting compact = moreCompact ? Formatting.COMPACT : Formatting.VERBOSE;
         if (System.currentTimeMillis() - time >= YEAR*1000) {
-            return ago(time, 0, 1, 0, Formatting.LAST_ONE_EXACT, Formatting.VERBOSE);
+            return ago(time, 0, 1, 0, Formatting.LAST_ONE_EXACT, compact);
         }
-        return ago(time, 0, 1, 0, Formatting.VERBOSE);
+        return ago(time, 0, 1, 0, compact);
     }
     
     public static String formatAccountAgeVerbose(long time) {
@@ -138,6 +151,13 @@ public class DateTime {
 
     public static String agoSingleCompact(long time) {
         return DateTime.ago(time, 0, 1, 0);
+    }
+    
+    public static String agoSingleCompactAboveMinute(long time) {
+        if (System.currentTimeMillis() - time > 60*1000) {
+            return DateTime.ago(time, 0, 1, 0);
+        }
+        return "now";
     }
     
     public static String agoSingleVerbose(long time) {
@@ -294,10 +314,19 @@ public class DateTime {
         return result;
     }
     
+    private static final MonthDay APRIL_FIRST = MonthDay.of(Month.APRIL, 1);
+    private static final ElapsedTime isAprilFirstET = new ElapsedTime();
+    private static boolean isAprilFirst;
+    
     public static boolean isAprilFirst() {
-        Calendar cal = Calendar.getInstance();
-        return cal.get(Calendar.MONTH) == Calendar.APRIL
-                && cal.get(Calendar.DAY_OF_MONTH) == 1;
+        if (Debugging.isEnabled("f2")) {
+            return true;
+        }
+        if (isAprilFirstET.secondsElapsed(600)) {
+            isAprilFirstET.set();
+            isAprilFirst = MonthDay.now().equals(APRIL_FIRST);
+        }
+        return isAprilFirst;
     }
     
     /**
@@ -317,13 +346,30 @@ public class DateTime {
         return odt.toInstant().toEpochMilli();
     }
     
+    private static final Pattern AM_PM_CUSTOM = Pattern.compile("'a:(.*?)\\/(.*?)'");
+    
+    public static SimpleDateFormat createSdfAmPm(String format) {
+        Matcher m = AM_PM_CUSTOM.matcher(format);
+        if (m.find()) {
+            String[] amPm = new String[]{m.group(1), m.group(2)};
+            format = m.replaceAll("");
+            
+            SimpleDateFormat sdf = new SimpleDateFormat(format);
+            DateFormatSymbols symbols = sdf.getDateFormatSymbols();
+            symbols.setAmPmStrings(amPm);
+            sdf.setDateFormatSymbols(symbols);
+            return sdf;
+        }
+        return new SimpleDateFormat(format);
+    }
+    
     public static final void main(String[] args) {
 //        System.out.println("'"+dur(HOUR*2+1, Formatting.COMPACT, 0, -2, 2, 2, 2)+"'");
 //        System.out.println("'"+duration(1000*MINUTE*1+1000, Formatting.COMPACT, N, 0, 0, 0, 2)+"'");
         //System.out.println(agoSingleVerbose(System.currentTimeMillis() ));
         //System.out.println(ago(System.currentTimeMillis() - 1000*60*60*25));
 //        System.out.println(duration(1000*(HOUR*2), 0, 0, 0, 1, Formatting.LAST_ONE_EXACT));
-        System.out.println(agoUptimeCompact(System.currentTimeMillis() - 1000*(MINUTE*110)));
+//        System.out.println(agoUptimeCompact(System.currentTimeMillis() - 1000*(MINUTE*110)));
         int a = 1 << 4;
         int b = 1 << 5;
         int c = 1 << 1;
@@ -342,12 +388,13 @@ public class DateTime {
 //        } catch (ParseException ex) {
 //            Logger.getLogger(DateTime.class.getName()).log(Level.SEVERE, null, ex);
 //        }
-        System.out.println(TimeUnit.HOURS.toMillis(1));
-        
-        System.out.println(formatAccountAgeCompact(System.currentTimeMillis() - 2500*1000));
-        System.out.println(formatAccountAgeCompact(System.currentTimeMillis() - DAY*3*1000));
-        System.out.println(formatAccountAgeCompact(System.currentTimeMillis() - YEAR*1*1000));
-        System.out.println(formatAccountAgeCompact(System.currentTimeMillis() - 12500*1000));
-        System.out.println(formatAccountAgeVerbose(System.currentTimeMillis() - 300*DAY*1000));
+//        System.out.println(TimeUnit.HOURS.toMillis(1));
+//        
+//        System.out.println(formatAccountAgeCompact(System.currentTimeMillis() - 2500*1000));
+//        System.out.println(formatAccountAgeCompact(System.currentTimeMillis() - DAY*3*1000));
+        System.out.println(formatAccountAgeCompact(System.currentTimeMillis() - YEAR*1*1000, true));
+//        System.out.println(formatAccountAgeCompact(System.currentTimeMillis() - 12500*1000));
+//        System.out.println(formatAccountAgeVerbose(System.currentTimeMillis() - 300*DAY*1000));
     }
+    
 }

@@ -53,6 +53,9 @@ public class WindowSettings extends SettingsPanel {
         minimizing.add(d.addSimpleBooleanSetting("trayIconAlways"),
                 d.makeGbc(2, 1, 1, 1, GridBagConstraints.WEST));
         
+        minimizing.add(d.addSimpleBooleanSetting("singleClickTrayOpen"),
+                d.makeGbc(0, 2, 3, 1, GridBagConstraints.WEST));
+        
         minimizing.add(d.addSimpleBooleanSetting("hideStreamsOnMinimize"),
                 d.makeGbc(0, 3, 3, 1, GridBagConstraints.WEST));
         
@@ -79,7 +82,10 @@ public class WindowSettings extends SettingsPanel {
                 d.makeGbc(0, 5, 2, 1, GridBagConstraints.WEST));
         
         other.add(d.addSimpleBooleanSetting("inputEnabled"),
-                d.makeGbc(0, 6, 2, 1, GridBagConstraints.WEST));   
+                d.makeGbc(0, 6, 2, 1, GridBagConstraints.WEST));
+        
+        other.add(d.addComboLongSetting("inputFocus", 0, 1),
+                d.makeGbc(0, 7, 2, 1, GridBagConstraints.WEST));
         
         //--------
         // Popout

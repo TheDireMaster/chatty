@@ -4,6 +4,7 @@ package chatty.gui.components.settings;
 import chatty.gui.GuiUtil;
 import chatty.util.colors.HtmlColors;
 import chatty.gui.LaF;
+import chatty.gui.LaF.LaFSettings;
 import chatty.gui.MainGui;
 import chatty.gui.components.LinkLabel;
 import chatty.gui.components.LinkLabelListener;
@@ -16,10 +17,13 @@ import chatty.util.settings.Setting;
 import chatty.util.settings.Settings;
 import java.awt.CardLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.Rectangle;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.KeyEvent;
@@ -56,8 +60,8 @@ public class SettingsDialog extends JDialog implements ActionListener {
             "tabOrder", "tabsMwheelScrolling", "tabsMwheelScrollingAnywhere", "inputFont",
             "bttvEmotes", "botNamesBTTV", "botNamesFFZ", "ffzEvent",
             "logPath", "logTimestamp", "logSplit", "logSubdirectories",
-            "tabsPlacement", "tabsLayout", "logLockFiles",
-            "laf", "lafTheme", "language"
+            "tabsPlacement", "tabsLayout", "logLockFiles", "logMessageTemplate",
+            "laf", "lafTheme", "lafFontScale", "language", "timezone"
     ));
     
     private final Set<String> reconnectRequiredDef = new HashSet<>(Arrays.asList(
@@ -66,6 +70,8 @@ public class SettingsDialog extends JDialog implements ActionListener {
     
     private boolean restartRequired = false;
     private boolean reconnectRequired = false;
+    protected boolean lafPreviewed;
+    private Dimension autoSetSize;
     
     private static final String RESTART_REQUIRED_INFO = "<html><body style='width: 280px'>"
             + Language.getString("settings.restartRequired");
@@ -79,7 +85,7 @@ public class SettingsDialog extends JDialog implements ActionListener {
     private final HashMap<String,ListSetting> listSettings = new HashMap<>();
     private final HashMap<String,MapSetting> mapSettings = new HashMap<>();
     
-    private final Settings settings;
+    final Settings settings;
     private final MainGui owner;
     
     private final NotificationSettings notificationSettings;
@@ -179,7 +185,7 @@ public class SettingsDialog extends JDialog implements ActionListener {
 
     public SettingsDialog(final MainGui owner, final Settings settings) {
         super(owner, Language.getString("settings.title"), true);
-        setResizable(false);
+//        setResizable(false);
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
         
         addWindowListener(new WindowAdapter() {
@@ -211,17 +217,30 @@ public class SettingsDialog extends JDialog implements ActionListener {
         selection = Tree.createTree(MENU);
         selection.setSelectionRow(0);
         selection.setBorder(BorderFactory.createEtchedBorder());
+        JScrollPane selectionScroll = new JScrollPane(selection);
+        selectionScroll.setBorder(BorderFactory.createEmptyBorder());
+        selectionScroll.setMinimumSize(selectionScroll.getPreferredSize());
 
         gbc = makeGbc(0,0,1,1);
         gbc.insets = new Insets(10,10,10,3);
         gbc.fill = GridBagConstraints.BOTH;
         gbc.weightx = 0;
         gbc.weighty = 1;
-        add(selection, gbc);
+        add(selectionScroll, gbc);
 
         // Create setting pages, the order here doesn't matter
         cardManager = new CardLayout();
-        cards = new JPanel(cardManager);
+        cards = new JPanel(cardManager) {
+            
+            @Override
+            public void add(Component comp, Object constraints) {
+                JScrollPane scroll = new JScrollPane(comp);
+                // Set to empty instead of null, so it's not overridden when changing LaF
+                scroll.setBorder(BorderFactory.createEmptyBorder());
+                super.add(scroll, constraints);
+            }
+            
+        };
         cards.add(new MainSettings(this), Page.MAIN.name);
         cards.add(new MessageSettings(this), Page.MESSAGES.name);
         cards.add(new ModerationSettings(this), Page.MODERATION.name);
@@ -319,16 +338,41 @@ public class SettingsDialog extends JDialog implements ActionListener {
     }
     
     public void showSettings(String action, Object parameter) {
+        //------------
+        // Initialize
+        //------------
         loadSettings();
         notificationSettings.setUserReadPermission(settings.getList("scopes").contains(TokenInfo.Scope.USERINFO.scope));
-        setLocationRelativeTo(owner);
         if (action != null) {
             editDirectly(action, parameter);
         }
         stuffBasedOnPanel();
         selection.requestFocusInWindow();
         
-        pack();
+        //-----------------
+        // Size / Position
+        //-----------------
+        // If not set and not manually resized window (not ideal, but should be
+        // good enough for now, manually resizing indicates wanting to have it
+        // a certain way)
+        if (autoSetSize == null || autoSetSize.equals(getSize())) {
+            pack();
+            Rectangle screenBounds = GuiUtil.getEffectiveScreenBounds(this);
+//            screenBounds = new Rectangle(700, 400); // Test
+            if (getHeight() > screenBounds.height) {
+                /**
+                 * Add some width for possible scrollbars, not ideal but should do
+                 * for now (especially since this shouldn't happen for many users)
+                 */
+                setSize(getWidth()+50, screenBounds.height);
+            }
+            if (getWidth() > screenBounds.width) {
+                setSize(screenBounds.width, getHeight());
+            }
+            GuiUtil.setLocationRelativeTo(this, owner);
+            autoSetSize = getSize(autoSetSize);
+        }
+        lafPreviewed = false;
         setVisible(true);
     }
     
@@ -523,7 +567,7 @@ public class SettingsDialog extends JDialog implements ActionListener {
     }
     
     private void changed(String settingName) {
-        if (restartRequiredDef.contains(settingName)) {
+        if (restartRequiredDef.contains(settingName) || lafPreviewed) {
             restartRequired = true;
             reconnectRequired = false;
         }
@@ -564,6 +608,17 @@ public class SettingsDialog extends JDialog implements ActionListener {
         gbc.gridwidth = w;
         gbc.gridheight = h;
         gbc.insets = new Insets(4,5,4,5);
+        gbc.anchor = anchor;
+        return gbc;
+    }
+    
+    protected GridBagConstraints makeNoGapGbc(int x, int y, int w, int h, int anchor) {
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = x;
+        gbc.gridy = y;
+        gbc.gridwidth = w;
+        gbc.gridheight = h;
+        gbc.insets = new Insets(0,0,0,0);
         gbc.anchor = anchor;
         return gbc;
     }
@@ -609,12 +664,20 @@ public class SettingsDialog extends JDialog implements ActionListener {
     }
     
     protected SimpleBooleanSetting addSimpleBooleanSetting(String name, String description, String tooltipText) {
-        if (tooltipText != null && !tooltipText.isEmpty()) {
-            tooltipText = "<html><body>"+StringUtil.addLinebreaks(tooltipText, 70, true);
-        }
-        SimpleBooleanSetting result = new SimpleBooleanSetting(description, tooltipText);
+        SimpleBooleanSetting result = makeSimpleBooleanSetting(description, tooltipText);
         booleanSettings.put(name,result);
         return result;
+    }
+    
+    protected SimpleBooleanSetting makeSimpleBooleanSetting(String labelName) {
+        return makeSimpleBooleanSetting(
+                Language.getString("settings.label."+labelName),
+                Language.getString("settings.label."+labelName+".tip", false));
+    }
+    
+    protected SimpleBooleanSetting makeSimpleBooleanSetting(String description, String tooltipText) {
+        tooltipText = SettingsUtil.addTooltipLinebreaks(tooltipText);
+        return new SimpleBooleanSetting(description, tooltipText);
     }
     
     protected void setBooleanSetting(String name, Boolean value) {
@@ -630,7 +693,7 @@ public class SettingsDialog extends JDialog implements ActionListener {
         return null;
     }
     
-    protected ComboStringSetting addComboStringSetting(String name, boolean editable, String[] choices) {
+    protected ComboStringSetting addComboStringSetting(String name, boolean editable, String... choices) {
         Map<String, String> localizedChoices = new LinkedHashMap<>();
         for (String choice : choices) {
             String label = Language.getString("settings.string."+name+".option."+choice, false);
@@ -702,7 +765,7 @@ public class SettingsDialog extends JDialog implements ActionListener {
      * @param name The name of the setting
      * @return The value of the setting or null if it doesn't exist
      */
-    protected String getStringSetting(String name) {
+    public String getStringSetting(String name) {
         if (stringSettings.containsKey(name)) {
             return stringSettings.get(name).getSettingValue();
         }
@@ -723,13 +786,17 @@ public class SettingsDialog extends JDialog implements ActionListener {
         return result;
     }
     
-    protected ComboLongSetting addComboLongSetting(String name, int[] choices) {
+    protected ComboLongSetting addComboLongSetting(String name, int... choices) {
         Map<Long, String> localizedChoices = new LinkedHashMap<>();
         for (Integer choice : choices) {
-            String label = Language.getString("settings.long."+name+".option."+choice);
+            String label = Language.getString("settings.long."+name+".option."+choice, false);
+            if (label == null) {
+                label = String.valueOf(choice);
+            }
             localizedChoices.put((long)choice, label);
         }
         ComboLongSetting result = new ComboLongSetting(localizedChoices);
+        result.setToolTipText(SettingsUtil.addTooltipLinebreaks(Language.getString("settings.long."+name+".tip", false)));
         longSettings.put(name, result);
         return result;
     }
@@ -759,7 +826,7 @@ public class SettingsDialog extends JDialog implements ActionListener {
      * @param name
      * @return 
      */
-    protected Long getLongSetting(String name) {
+    public Long getLongSetting(String name) {
         if (longSettings.containsKey(name)) {
             return longSettings.get(name).getSettingValue();
         }
@@ -809,6 +876,39 @@ public class SettingsDialog extends JDialog implements ActionListener {
         return table;
     }
     
+    protected JLabel createLabel(String settingName) {
+        return createLabel(settingName, false);
+    }
+    
+    protected JLabel createLabel(String settingName, boolean info) {
+        String text = Language.getString("settings.label."+settingName);
+        String tip = Language.getString("settings.label."+settingName+".tip", false);
+        JLabel label;
+        if (info) {
+            label = new JLabel(SettingConstants.HTML_PREFIX+text);
+        } else {
+            label = new JLabel(text);
+        }
+        label.setToolTipText(SettingsUtil.addTooltipLinebreaks(tip));
+        return label;
+    }
+    
+    protected JPanel createPanel(String settingName, JComponent... settingComponent) {
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = makeGbc(0, 0, 1, 1);
+        // Make sure to only have space between the two components, since other
+        // spacing will be added when this panel is added to the layout
+        gbc.insets = new Insets(0, 0, 0, gbc.insets.right);
+        panel.add(createLabel(settingName), gbc);
+        gbc = makeGbc(1, 0, 1, 1);
+        gbc.insets = new Insets(0, gbc.insets.left, 0, 0);
+        for (JComponent comp : settingComponent) {
+            panel.add(comp, gbc);
+            gbc.gridx++;
+        }
+        return panel;
+    }
+    
     protected void clearHistory() {
         owner.clearHistory();
     }
@@ -830,9 +930,8 @@ public class SettingsDialog extends JDialog implements ActionListener {
     
     private void cancel() {
         Sound.setDeviceName(settings.getString("soundDevice"));
-        if (!settings.getString("laf").equals(stringSettings.get("laf").getSettingValue())
-                || !settings.getString("lafTheme").equals(stringSettings.get("lafTheme").getSettingValue())) {
-            LaF.setLookAndFeel(settings.getString("laf"), settings.getString("lafTheme"));
+        if (lafPreviewed) {
+            LaF.setLookAndFeel(LaFSettings.fromSettings(settings));
             LaF.updateLookAndFeel();
         }
         close();

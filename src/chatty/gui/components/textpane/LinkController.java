@@ -6,19 +6,27 @@ import chatty.User;
 import chatty.gui.LinkListener;
 import chatty.gui.MouseClickedListener;
 import chatty.gui.UserListener;
+import chatty.gui.components.Channel;
 import chatty.gui.components.menus.ChannelContextMenu;
 import chatty.gui.components.menus.ContextMenu;
 import chatty.gui.components.menus.ContextMenuListener;
 import chatty.gui.components.menus.EmoteContextMenu;
+import chatty.gui.components.menus.TextSelectionMenu;
 import chatty.gui.components.menus.UrlContextMenu;
 import chatty.gui.components.menus.UserContextMenu;
 import chatty.gui.components.menus.UsericonContextMenu;
+import static chatty.gui.components.textpane.SettingConstants.USER_HOVER_HL_CTRL;
+import static chatty.gui.components.textpane.SettingConstants.USER_HOVER_HL_MENTIONS;
+import static chatty.gui.components.textpane.SettingConstants.USER_HOVER_HL_MENTIONS_CTRL_ALL;
 import chatty.util.Debugging;
 import chatty.util.StringUtil;
+import chatty.util.TwitchEmotesApi;
+import chatty.util.TwitchEmotesApi.EmotesetInfo;
 import chatty.util.api.Emoticon;
 import chatty.util.api.Emoticon.EmoticonImage;
 import chatty.util.api.Emoticons;
 import chatty.util.api.usericons.Usericon;
+import java.awt.Color;
 import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.Dimension;
@@ -28,20 +36,27 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.Enumeration;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import javax.swing.BorderFactory;
+import javax.swing.ImageIcon;
 import javax.swing.JLabel;
 import javax.swing.JPopupMenu;
 import javax.swing.JTextPane;
 import javax.swing.JViewport;
 import javax.swing.Popup;
 import javax.swing.PopupFactory;
+import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.Element;
+import javax.swing.text.JTextComponent;
 import javax.swing.text.StyledDocument;
 import javax.swing.text.html.HTML;
 
@@ -63,6 +78,10 @@ public class LinkController extends MouseAdapter {
      * When a User is clicked, the User object is send here
      */
     private final Set<UserListener> userListener = new HashSet<>();
+    
+    private Consumer<User> userHoverListener;
+    private int userHoverHighlightMode;
+    
     /**
      * When a link is clicked, the String with the url is send here
      */
@@ -72,9 +91,13 @@ public class LinkController extends MouseAdapter {
     
     private ContextMenuListener contextMenuListener;
     
-    private ContextMenu defaultContextMenu;
+    private Supplier<ContextMenu> defaultContextMenuCreator;
+    
+    private Channel channel;
     
     private MyPopup popup = new MyPopup();
+    
+    private boolean popupImagesEnabled;
     
     private Element prevHoverElement;
     
@@ -87,6 +110,14 @@ public class LinkController extends MouseAdapter {
         if (listener != null) {
             userListener.add(listener);
         }
+    }
+    
+    public void setUserHoverListener(Consumer<User> listener) {
+        this.userHoverListener = listener;
+    }
+    
+    public void setUserHoverHighlightMode(int mode) {
+        this.userHoverHighlightMode = mode;
     }
     
     /**
@@ -109,9 +140,6 @@ public class LinkController extends MouseAdapter {
      */
     public void setContextMenuListener(ContextMenuListener listener) {
         contextMenuListener = listener;
-        if (defaultContextMenu != null) {
-            defaultContextMenu.addContextMenuListener(listener);
-        }
     }
     
     /**
@@ -120,9 +148,12 @@ public class LinkController extends MouseAdapter {
      * 
      * @param contextMenu 
      */
-    public void setDefaultContextMenu(ContextMenu contextMenu) {
-        defaultContextMenu = contextMenu;
-        contextMenu.addContextMenuListener(contextMenuListener);
+    public void setContextMenuCreator(Supplier<ContextMenu> contextMenu) {
+        defaultContextMenuCreator = contextMenu;
+    }
+    
+    public void setChannel(Channel channel) {
+        this.channel = channel;
     }
    
     /**
@@ -155,10 +186,12 @@ public class LinkController extends MouseAdapter {
             if (linkListener != null) {
                 linkListener.linkClicked(url);
             }
-        } else if ((user = getUser(element)) != null) {
+        } else if ((user = getUser(element)) != null
+                || (user = getMention(element)) != null) {
             for (UserListener listener : userListener) {
+                final User finalUser = user;
                 SwingUtilities.invokeLater(() -> {
-                    listener.userClicked(user, getMsgId(element), getAutoModMsgId(element), e);
+                    listener.userClicked(finalUser, getMsgId(element), getAutoModMsgId(element), e);
                 });
             }
         } else if ((emoteImage = getEmoticonImage(element)) != null) {
@@ -208,7 +241,7 @@ public class LinkController extends MouseAdapter {
         
         JTextPane textPane = (JTextPane)e.getSource();
         if (Debugging.isEnabled("attr")) {
-            popup.show(textPane, element, debugElement(element), -1);
+            popup.show(textPane, element, p -> debugElement(element, p), -1);
             return;
         }
         
@@ -216,17 +249,20 @@ public class LinkController extends MouseAdapter {
         Usericon usericon = getUsericon(element);
         String replacedText = getReplacedText(element);
         if (emoteImage != null) {
-            popup.show(textPane, element, makeEmoticonPopupText(emoteImage), emoteImage.getImageIcon().getIconWidth());
+            popup.show(textPane, element, p -> makeEmoticonPopupText(emoteImage, popupImagesEnabled, p, element), emoteImage.getImageIcon().getIconWidth());
         } else if (usericon != null) {
-            popup.show(textPane, element, makeUsericonPopupText(usericon), usericon.image.getIconWidth());
+            popup.show(textPane, element, p -> makeUsericonPopupText(usericon, p), usericon.image.getIconWidth());
         } else if (replacedText != null) {
-            popup.show(textPane, element, makeReplacementPopupText(replacedText), 1);
+            popup.show(textPane, element, p -> makeReplacementPopupText(replacedText, p), 1);
         } else {
             popup.hide();
         }
 
+        User user = null;
+        User mention = null;
         boolean isClickableElement = (getUrl(element) != null && !isUrlDeleted(element))
-                || getUser(element) != null
+                || (user = getUser(element)) != null
+                || (mention = getMention(element)) != null
                 || emoteImage != null
                 || usericon != null;
         
@@ -234,6 +270,22 @@ public class LinkController extends MouseAdapter {
             textPane.setCursor(HAND_CURSOR);
         } else {
             textPane.setCursor(NORMAL_CURSOR);
+        }
+        if (userHoverListener != null) {
+            if (user == null) {
+                user = mention;
+            }
+            // Don't highlight depending on setting, whether it's a mention and
+            // ctrl is being held
+            if ((userHoverHighlightMode == USER_HOVER_HL_MENTIONS_CTRL_ALL
+                        && mention == null && !e.isControlDown())
+                    || (userHoverHighlightMode == USER_HOVER_HL_CTRL
+                        && !e.isControlDown())
+                    || (userHoverHighlightMode == USER_HOVER_HL_MENTIONS
+                        && mention == null)) {
+                user = null;
+            }
+            userHoverListener.accept(user);
         }
     }
     
@@ -258,6 +310,10 @@ public class LinkController extends MouseAdapter {
         return (User) e.getAttributes().getAttribute(ChannelTextPane.Attribute.USER);
     }
     
+    private User getMention(Element e) {
+        return (User) e.getAttributes().getAttribute(ChannelTextPane.Attribute.MENTION);
+    }
+    
     private String getMsgId(Element e) {
         return (String) e.getAttributes().getAttribute(ChannelTextPane.Attribute.ID);
     }
@@ -276,6 +332,11 @@ public class LinkController extends MouseAdapter {
     
     private String getReplacedText(Element e) {
         return (String)(e.getAttributes().getAttribute(ChannelTextPane.Attribute.REPLACEMENT_FOR));
+    }
+    
+    private String getSelectedText(MouseEvent e) {
+        JTextPane text = (JTextPane) e.getSource();
+        return text.getSelectedText();
     }
     
     public static Element getElement(MouseEvent e) {
@@ -325,11 +386,15 @@ public class LinkController extends MouseAdapter {
         if (element == null) {
             return;
         }
+        String selectedText = getSelectedText(e);
         User user = getUser(element);
+        if (user == null) {
+            user = getMention(element);
+        }
         String url = getUrl(element);
         EmoticonImage emoteImage = getEmoticonImage(element);
         Usericon usericon = getUsericon(element);
-        JPopupMenu m;
+        JPopupMenu m = null;
         if (user != null) {
             m = new UserContextMenu(user, getMsgId(element),
                     getAutoModMsgId(element), contextMenuListener);
@@ -343,16 +408,29 @@ public class LinkController extends MouseAdapter {
         else if (usericon != null) {
             m = new UsericonContextMenu(usericon, contextMenuListener);
         }
+        else if (selectedText != null) {
+            m = new TextSelectionMenu((JTextComponent)e.getSource(), false);
+        }
         else {
-            if (defaultContextMenu == null) {
-                m = new ChannelContextMenu(contextMenuListener);
+            if (defaultContextMenuCreator == null) {
+                if (channel != null) {
+                    m = new ChannelContextMenu(contextMenuListener, channel);
+                }
             } else {
-                m = defaultContextMenu;
+                ContextMenu menu = defaultContextMenuCreator.get();
+                menu.addContextMenuListener(contextMenuListener);
+                m = menu;
             }
         }
-        m.show(e.getComponent(), e.getX(), e.getY());
+        if (m != null) {
+            m.show(e.getComponent(), e.getX(), e.getY());
+        }
         popup.hide();
     }
+    
+    //=============
+    // Popup Stuff
+    //=============
     
     private static class MyPopup {
         
@@ -377,22 +455,29 @@ public class LinkController extends MouseAdapter {
         private boolean preparingToShow;
         private JTextPane textPane;
         private int sourceWidth;
-        private String text;
         private Element element;
         private Point position;
+        private boolean contentChanged;
+        private boolean contentSet;
+        private Consumer<MyPopup> provider;
 
         public MyPopup() {
             showTimer = new Timer(SHOW_DELAY, e -> {
                 showNow();
             });
             showTimer.setRepeats(false);
+            label.setHorizontalTextPosition(SwingConstants.CENTER);
+            label.setVerticalTextPosition(SwingConstants.BOTTOM);
+            label.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(Color.BLACK),
+                    BorderFactory.createEmptyBorder(3, 5, 3, 5)));
         }
         
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
         }
         
-        public void show(JTextPane textPane, Element element, String text, int sourceWidth) {
+        public void show(JTextPane textPane, Element element, Consumer<MyPopup> provider, int sourceWidth) {
             if (!enabled) {
                 return;
             }
@@ -404,10 +489,11 @@ public class LinkController extends MouseAdapter {
             }
 
             this.textPane = textPane;
-            this.text = text;
             this.sourceWidth = sourceWidth;
             this.element = element;
+            this.provider = provider;
             
+            contentSet = false;
             preparingToShow = true;
             if (System.currentTimeMillis() - lastShown < NO_DELAY_WINDOW) {
                 showNow();
@@ -428,12 +514,56 @@ public class LinkController extends MouseAdapter {
             }
         }
         
+        /**
+         * Set new text and update if showing.
+         * 
+         * @param newText 
+         */
+        public void setText(String newText) {
+            if (!Objects.equals(newText, label.getText())) {
+                label.setText(newText);
+                contentChanged = true;
+                // Will only update if showing
+                update();
+            }
+        }
+        
+        /**
+         * Set a new icon and update if showing.
+         * 
+         * @param icon 
+         */
+        public void setIcon(ImageIcon icon) {
+            if (!Objects.equals(icon, label.getIcon())) {
+                label.setIcon(icon);
+                contentChanged = true;
+                // Will only update if showing
+                update();
+            }
+        }
+                
+        public boolean isCurrentElement(Element element) {
+            return this.element == element;
+        }
+        
+        /**
+         * Reshow (if still visible), even without explicitly changing content.
+         */
+        public void forceUpdate() {
+            contentChanged = true;
+            update();
+        }
+        
+        /**
+         * Reshow or hide, depending on updated position. Can't change position
+         * of a Popup, so reshowing appears to be necessary.
+         */
         public void update() {
             if (popup != null) {
                 Point newPos = determinePosition();
                 if (newPos == null) {
                     hide();
-                } else if (!newPos.equals(position)) {
+                } else if (!newPos.equals(position) || contentChanged) {
                     hide();
                     showNow();
                 }
@@ -444,8 +574,16 @@ public class LinkController extends MouseAdapter {
             if (popup != null) {
                 return;
             }
-            label.setText(text);
-
+            if (!contentSet) {
+                // Reset/set once per show()
+                label.setText(null);
+                label.setIcon(null);
+                // Fill values
+                provider.accept(this);
+                contentSet = true;
+            }
+            contentChanged = false;
+            
             Point p = determinePosition();
             if (p != null) {
                 position = p;
@@ -474,16 +612,20 @@ public class LinkController extends MouseAdapter {
                 if (viewPort instanceof JViewport) {
                     // Only check bounds if parent is as expected
                     Point bounds = viewPort.getLocationOnScreen();
+                    // Top
                     if (bounds.y - 20 > r.y) {
+                        r.y += labelSize.height + r.height + 4;
+                    }
+                    // Bottom
+                    if (bounds.y + viewPort.getHeight() < r.y + labelSize.height) {
                         return null;
                     }
-                    if (bounds.y + viewPort.getHeight() < r.y) {
-                        return null;
-                    }
+                    // Left
                     int overLeftEdge = (bounds.x - 5) - r.x;
                     if (overLeftEdge > 0) {
                         r.x = r.x + overLeftEdge;
                     }
+                    // Right
                     int overRightEdge = (r.x + labelSize.width) - (bounds.x + textPane.getWidth() + 10);
                     if (overRightEdge > 0) {
                         r.x = r.x - overRightEdge;
@@ -505,6 +647,10 @@ public class LinkController extends MouseAdapter {
         prevHoverElement = element;
     }
     
+    //======================
+    // Public Popup Methods
+    //======================
+    
     /**
      * This ultimately calls modelToView(), so it probably shouldn't be called
      * during printing a line with many elements.
@@ -517,51 +663,98 @@ public class LinkController extends MouseAdapter {
         popup.setEnabled(enabled);
     }
     
-    private static final String POPUP_HTML_PREFIX = "<html>"
-            + "<body style='text-align:center;font-weight:bold;border:1px solid #000;padding:3px 5px 3px 5px;'>";
+    public void setPopupImagesEnabled(boolean enabled) {
+        popupImagesEnabled = enabled;
+    }
     
-    private static String makeEmoticonPopupText(EmoticonImage emoticonImage) {
+    public void cleanUp() {
+        popup.cleanUp();
+    }
+
+    //===============
+    // Popup Content
+    //===============
+    
+    private static final String POPUP_HTML_PREFIX = "<html>"
+            + "<body style='text-align:center;font-weight:bold;'>";
+    
+    //----------------
+    // Emoticon Popup
+    //----------------
+    
+    private static final Object unique = new Object();
+    
+    private static void makeEmoticonPopupText(EmoticonImage emoticonImage, boolean showImage, MyPopup popup, Element element) {
+        Debugging.println("emoteinfo", "makePopupText %s", emoticonImage.getEmoticon());
         Emoticon emote = emoticonImage.getEmoticon();
-        String emoteInfo = "";
-        if (!emote.hasStreamSet() && emote.hasEmotesetInfo()) {
-            emoteInfo = emote.getEmotesetInfo() + " Emoticon";
-        } else if (emote.subType == Emoticon.SubType.CHEER) {
-            emoteInfo = "Cheering Emote";
-            if (emote.hasStreamRestrictions()) {
-                emoteInfo += " Local";
+        EmotesetInfo info = TwitchEmotesApi.api.getInfoByEmote(unique, result -> {
+            SwingUtilities.invokeLater(() -> {
+                Debugging.println("emoteinfo", "Request result: %s", result);
+                // The popup may be for a different element by now
+                if (popup.isCurrentElement(element)) {
+                    popup.setText(makeEmoticonPopupText2(emoticonImage, showImage, result, popup));
+                }
+            });
+        }, emote);
+        popup.setText(makeEmoticonPopupText2(emoticonImage, showImage, info, popup));
+    }
+    
+    private static String makeEmoticonPopupText2(EmoticonImage emoticonImage, boolean showImage, EmotesetInfo emoteInfo, MyPopup popup) {
+        Emoticon emote = emoticonImage.getEmoticon();
+        String result = "";
+        if (emote.type == Emoticon.Type.TWITCH) {
+            if (emote.subType == Emoticon.SubType.CHEER) {
+                result = "Cheering Emote";
+                if (emote.hasStreamRestrictions()) {
+                    result += " Local";
+                } else {
+                    result += " Global";
+                }
             } else {
-                emoteInfo += " Global";
+                result = TwitchEmotesApi.getEmoteType(emote, emoteInfo, true);
             }
-        } else if (Emoticons.isTurboEmoteset(emote.emoteSet)) {
-            emoteInfo = "Turbo/Prime";
-        } else if (!emote.hasGlobalEmoteset() && emote.hasStreamSet()) {
-            emoteInfo = "Subemote ("+emote.getStream()+")";
-        } else if (!emote.hasGlobalEmoteset()) {
-            emoteInfo = "Unknown Emote";
         } else {
-            emoteInfo = emote.type.label;
+            result = emote.type.label;
             if (emote.type != Emoticon.Type.EMOJI) {
                 if (emote.hasStreamRestrictions()) {
-                    emoteInfo += " Local";
+                    result += " Local";
                 } else {
-                    emoteInfo += " Global";
+                    result += " Global";
                 }
             }
         }
+
         if (Debugging.isEnabled("tt")) {
-            emoteInfo += " ["+emoticonImage.getImageIcon().getDescription()+"]";
+            result += " [" + emoticonImage.getImageIcon().getDescription() + "]";
+        }
+
+        if (showImage && !emote.isAnimated()) {
+            EmoticonImage icon = emote.getIcon(2, 0, (o,n,c) -> {
+                // The set ImageIcon will have been updated
+                popup.forceUpdate();
+            });
+            popup.setIcon(icon.getImageIcon());
         }
         String code = emote.type == Emoticon.Type.EMOJI ? emote.stringId : Emoticons.toWriteable(emote.code);
         return String.format("%s%s<br /><span style='font-weight:normal'>%s</span>",
                 POPUP_HTML_PREFIX,
                 Helper.htmlspecialchars_encode(code),
-                emoteInfo);
+                result);
     }
     
-    private static String makeUsericonPopupText(Usericon usericon) {
+    //----------------
+    // Usericon Popup
+    //----------------
+    
+    private static void makeUsericonPopupText(Usericon usericon, MyPopup p) {
         String info;
         if (!usericon.metaTitle.isEmpty()) {
             info = POPUP_HTML_PREFIX+"Badge: "+usericon.metaTitle;
+        } else if (usericon.type == Usericon.Type.HL) {
+            // Customize text since not really a badge
+            info = POPUP_HTML_PREFIX+usericon.type.label;
+        } else if (usericon.type == Usericon.Type.CHANNEL_LOGO) {
+            info = POPUP_HTML_PREFIX+"Channel Logo: "+usericon.channel;
         } else {
             info = POPUP_HTML_PREFIX+"Badge: "+usericon.type.label;
         }
@@ -574,22 +767,26 @@ public class LinkController extends MouseAdapter {
         if (Debugging.isEnabled("tt")) {
             info += " ["+usericon.image.getDescription()+"]";
         }
-        return info;
+        p.setText(info);
     }
     
-    private static String makeReplacementPopupText(String replacedText) {
-        return String.format("%sFiltered Text<div style='text-align:left;font-weight:normal'>%s</div>",
+    //-------------------
+    // Replacement Popup
+    //-------------------
+    
+    private static void makeReplacementPopupText(String replacedText, MyPopup p) {
+        p.setText(String.format("%sFiltered Text<div style='text-align:left;font-weight:normal'>%s</div>",
                 POPUP_HTML_PREFIX,
-                StringUtil.addLinebreaks(Helper.htmlspecialchars_encode(replacedText), 70, true));
+                StringUtil.addLinebreaks(Helper.htmlspecialchars_encode(replacedText), 70, true)));
     }
     
-    public void cleanUp() {
-        popup.cleanUp();
-    }
+    //-------------
+    // Debug Popup
+    //-------------
     
-    private static String debugElement(Element e) {
+    private static void debugElement(Element e, MyPopup p) {
         StringBuilder result = new StringBuilder();
-        result.append("<html><body style='font-weight:normal;border:1px solid #000;padding:3px 5px 3px 5px;'>");
+        result.append("<html><body style='font-weight:normal;'>");
         try {
             String text = e.getDocument().getText(e.getStartOffset(), e.getEndOffset() - e.getStartOffset());
             text = text.replace("\n", "\\n"); // Make linebreaks visible
@@ -598,7 +795,8 @@ public class LinkController extends MouseAdapter {
             if (e.isLeaf() && e.getParentElement() != null) {
                 Element parent = e.getParentElement();
                 int elementIndex = parent.getElementIndex(e.getStartOffset());
-                result.append("Index: ").append(elementIndex).append(" - Count: ").append(parent.getElementCount());
+                result.append("Index: ").append(elementIndex).append(" of ").append(parent.getElementCount());
+                result.append(" (Length: ").append(e.getEndOffset() - e.getStartOffset()).append(")");
                 result.append("<br />");
             }
         } catch (BadLocationException ex) {
@@ -612,12 +810,14 @@ public class LinkController extends MouseAdapter {
             while (en.hasMoreElements()) {
                 Object key = en.nextElement();
                 Object value = attrs.getAttribute(key);
-                result.append(key).append(" => ").append(value);
+                result.append(Helper.htmlspecialchars_encode(String.valueOf(key)));
+                result.append(" => ");
+                result.append(Helper.htmlspecialchars_encode(String.valueOf(value)));
                 result.append("<br />");
             }
             attrs = attrs.getResolveParent();
         }
-        return result.toString();
+        p.setText(result.toString());
     }
     
 }
