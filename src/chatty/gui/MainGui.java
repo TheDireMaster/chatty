@@ -179,44 +179,23 @@ public class MainGui extends JFrame implements Runnable {
         createGui();
     }
 
-    
-    private Image createImage(String name) {
-        return Toolkit.getDefaultToolkit().createImage(getClass().getResource(name));
-    }
-    
     /**
      * Sets different sizes of the window icon.
      */
     private void setWindowIcons() {
-        ArrayList<Image> windowIcons = new ArrayList<>();
-        windowIcons.add(createImage("app_main_16.png"));
-        windowIcons.add(createImage("app_main_64.png"));
-        windowIcons.add(createImage("app_main_128.png"));
-        setIconImages(windowIcons);
+        setIconImages(IconManager.getMainIcons());
     }
     
     private void setLiveStreamsWindowIcons() {
-        ArrayList<Image> windowIcons = new ArrayList<>();
-        windowIcons.add(createImage("app_live_16.png"));
-        windowIcons.add(createImage("app_live_64.png"));
-        windowIcons.add(createImage("app_live_128.png"));
-        liveStreamsDialog.setIconImages(windowIcons);
+        liveStreamsDialog.setIconImages(IconManager.getLiveIcons());
     }
     
     private void setHelpWindowIcons() {
-        ArrayList<Image> windowIcons = new ArrayList<>();
-        windowIcons.add(createImage("app_help_16.png"));
-        windowIcons.add(createImage("app_help_64.png"));
-        windowIcons.add(createImage("app_help_128.png"));
-        aboutDialog.setIconImages(windowIcons);
+        aboutDialog.setIconImages(IconManager.getHelpIcons());
     }
     
     private void setDebugWindowIcons() {
-        ArrayList<Image> windowIcons = new ArrayList<>();
-        windowIcons.add(createImage("app_debug_16.png"));
-        windowIcons.add(createImage("app_debug_64.png"));
-        windowIcons.add(createImage("app_debug_128.png"));
-        debugWindow.setIconImages(windowIcons);
+        debugWindow.setIconImages(IconManager.getDebugIcons());
     }
     
     /**
@@ -250,7 +229,7 @@ public class MainGui extends JFrame implements Runnable {
         GuiUtil.installEscapeCloseOperation(favoritesDialog);
         joinDialog = new JoinDialog(this);
         GuiUtil.installEscapeCloseOperation(joinDialog);
-        liveStreamsDialog = new LiveStreamsDialog(contextMenuListener, client.channelFavorites);
+        liveStreamsDialog = new LiveStreamsDialog(contextMenuListener, client.channelFavorites, client.settings);
         setLiveStreamsWindowIcons();
         //GuiUtil.installEscapeCloseOperation(liveStreamsDialog);
         EmoteContextMenu.setEmoteManager(emoticons);
@@ -1833,6 +1812,22 @@ public class MainGui extends JFrame implements Runnable {
                 JCheckBoxMenuItem item = (JCheckBoxMenuItem)e.getSource();
                 client.settings.setBoolean("liveStreamsSortingFav", item.isSelected());
             }
+            if (cmd.equals("favoriteGame")) {
+                for (StreamInfo info : streamInfos) {
+                    if (!StringUtil.isNullOrEmpty(info.getGame())) {
+                        client.settings.setAdd("gameFavorites", info.getGame());
+                    }
+                }
+                client.settings.setSettingChanged("gameFavorites");
+            }
+            if (cmd.equals("unfavoriteGame")) {
+                for (StreamInfo info : streamInfos) {
+                    if (!StringUtil.isNullOrEmpty(info.getGame())) {
+                        client.settings.listRemove("gameFavorites", info.getGame());
+                    }
+                }
+                client.settings.setSettingChanged("gameFavorites");
+            }
         }
         
         /**
@@ -1949,7 +1944,7 @@ public class MainGui extends JFrame implements Runnable {
                     String url;
                     switch (cmd) {
                         case "stream":
-                            url = TwitchUrl.makeTwitchStreamUrl(stream, false);
+                            url = TwitchUrl.makeTwitchStreamUrl(stream);
                             break;
                         case "profile":
                             url = TwitchUrl.makeTwitchProfileUrl(stream);
@@ -1961,7 +1956,7 @@ public class MainGui extends JFrame implements Runnable {
                             url = TwitchUrl.makeTwitchChatUrl(stream);
                             break;
                         default:
-                            url = TwitchUrl.makeTwitchStreamUrl(stream, true);
+                            url = TwitchUrl.makeTwitchStreamUrl(stream);
                             break;
                     }
                     urls.add(url);
@@ -2269,7 +2264,7 @@ public class MainGui extends JFrame implements Runnable {
     }
     
     /**
-     * 
+     * Add commands related to the GUI.
      */
     public void addGuiCommands() {
         client.commands.addEdt("settings", p -> {
@@ -2363,7 +2358,7 @@ public class MainGui extends JFrame implements Runnable {
             if (p.hasArgs()) {
                 message = p.getArgs();
             }
-            UserMessage m = new UserMessage(client.getSpecialUser(), message, null, null, 0, null, null, null);
+            UserMessage m = new UserMessage(client.getSpecialUser(), message, null, null, 0, null, null, null, MsgTags.EMPTY);
             streamChat.printMessage(m);
         });
         client.commands.addEdt("livestreamer", p -> {
@@ -2987,7 +2982,9 @@ public class MainGui extends JFrame implements Runnable {
                         ignoreMatches = ignoreList.getLastTextMatches();
                     }
                     ignoredMessages.addMessage(channel, user, text, action,
-                            tagEmotes, bitsForEmotes, whisper, ignoreMatches);
+                            tagEmotes, bitsForEmotes, whisper, ignoreMatches,
+                            tags);
+                    client.chatLog.message("_ignored", user, "["+channel+"] "+text, action);
                     ignoredMessagesHelper.ignoredMessage(channel);
                 }
                 long ignoreMode = client.settings.getLong("ignoreMode");
@@ -3007,8 +3004,8 @@ public class MainGui extends JFrame implements Runnable {
                     UserMessage message = new UserMessage(user, text, tagEmotes, tags.getId(), bitsForEmotes,
                             highlightMatches,
                             hasReplacements ? filter.getLastTextMatches() : null,
-                            hasReplacements ? filter.getLastReplacement() : null);
-                    message.pointsHl = tags.isHighlightedMessage();
+                            hasReplacements ? filter.getLastReplacement() : null,
+                            tags);
                     
                     // Custom color
                     boolean hlByPoints = tags.isHighlightedMessage() && client.settings.getBoolean("highlightByPoints");
@@ -3037,6 +3034,7 @@ public class MainGui extends JFrame implements Runnable {
                     chan.printMessage(message);
                     if (highlighted) {
                         highlightedMessages.addMessage(channel, message);
+                        client.chatLog.message("_highlighted", user, "["+channel+"] "+text, action);
                     }
                     if (client.settings.listContains("streamChatChannels", channel)) {
                         streamChat.printMessage(message);
@@ -3336,6 +3334,7 @@ public class MainGui extends JFrame implements Runnable {
                 // After colors and everything is set
                 if (highlighted) {
                     highlightedMessages.addInfoMessage(channel.getChannel(), message);
+                    client.chatLog.info("_highlighted", "["+channel.getChannel()+"] "+message);
                 }
             }
             channel.printInfoMessage(message);
@@ -3344,6 +3343,7 @@ public class MainGui extends JFrame implements Runnable {
             }
         } else if (!message.isHidden()) {
             ignoredMessages.addInfoMessage(channel.getRoom().getDisplayName(), message.text);
+            client.chatLog.info("_ignored", "["+channel.getChannel()+"] "+message);
         }
         
         //----------
@@ -4167,7 +4167,7 @@ public class MainGui extends JFrame implements Runnable {
                 client.settings.setString("token", "");
             }
             else {
-                result = "Login data invalid. [help:login-invalid What does this mean?]";
+                result = "Login data invalid. This may only be temporary. If the issue persists, remove login and connect Twitch account again.";
             }
             if (!showInDialog && !changedTokenResponse) {
                 showTokenWarning();
@@ -4303,6 +4303,10 @@ public class MainGui extends JFrame implements Runnable {
 
     public String getActiveStream() {
         return channels.getActiveChannel().getStreamName();
+    }
+    
+    public Room getActiveRoom() {
+        return channels.getActiveChannel().getRoom();
     }
     
     /**
@@ -4494,6 +4498,8 @@ public class MainGui extends JFrame implements Runnable {
                     emotesDialog.setCloseOnDoubleClick(bool);
                 } else if (setting.equals("foreignToken")) {
                     tokenDialog.setForeignToken(bool);
+                } else if (setting.equals("completionEnabled")) {
+                    channels.setCompletionEnabled(bool);
                 }
                 if (setting.startsWith("title")) {
                     updateState(true);

@@ -49,6 +49,13 @@ public class RawMessageTest {
         if (type.equals("subextend")) {
             return "@badge-info=subscriber/1;badges=staff/1,subscriber/0,premium/1;color=;display-name=Test;emotes=;flags=;id=abc;login=test;mod=0;msg-id=extendsub;msg-param-sub-benefit-end-month=4;msg-param-sub-plan=1000;msg-param-cumulative-months=16;room-id=123;subscriber=1;system-msg=Test\\sextended\\stheir\\sTier\\s1\\ssubscription\\sthrough\\sApril!;tmi-sent-ts=123;user-id=123;user-type=staff :tmi.twitch.tv USERNOTICE "+channel;
         }
+        if (type.equals("submsg")) {
+            return "@badge-info=subscriber/31;badges=subscriber/24;color=;display-name=Test;emotes=;flags=;id=abc;mod=0;room-id=123;subscriber=1;tmi-sent-ts=123;turbo=0;user-id=123;user-type= :test!test@test.tmi.twitch.tv PRIVMSG "+channel+" :abc blah";
+        }
+        if (type.equals("submsg2")) {
+            // #cirno_tv
+            return "@badge-info=subscriber/31;badges=subscriber/2024,bits/5000;client-nonce=abc;color=#4AADFF;display-name=Test;emotes=;flags=;id=abc;mod=0;room-id=123;subscriber=1;tmi-sent-ts=123;turbo=0;user-id=123;user-type= :test!test@test.tmi.twitch.tv PRIVMSG "+channel+" :Abc";
+        }
         if (type.equals("bits")) {
             return "@badges=bits/1000;bits=1;color=#FF7F50;display-name=tduvaTest;emotes=;id=123;mod=0;subscriber=0;turbo=0;user-type= :tduvatest!tduvatest@tduvatest.tmi.twitch.tv PRIVMSG "+channel+" :"+options;
         }
@@ -126,6 +133,9 @@ public class RawMessageTest {
         }
         if (type.equals("creward")) {
             return "@badge-info=;badges=vip/1,premium/1;color=#0000FF;custom-reward-id=r3ward-1d;display-name=Test;emotes=;flags=;id=123;mod=0;room-id=123;subscriber=0;tmi-sent-ts=123;turbo=0;user-id=123;user-type= :test!test@test.tmi.twitch.tv PRIVMSG "+channel+" :Message text";
+        }
+        if (type.equals("reply")) {
+            return "@badge-info=subscriber/40;badges=broadcaster/1,subscriber/3024,partner/1;client-nonce=abc;color=#FF526F;display-name=TestUser;emotes=;flags=;id=abc;mod=0;reply-parent-display-name=OtherUser;reply-parent-msg-body=Test:\\sAbc;reply-parent-msg-id=abcd;reply-parent-user-id=123;reply-parent-user-login=otheruser;room-id=123;subscriber=1;tmi-sent-ts=123;turbo=0;user-type= :testuser!testuser@testuser.tmi.twitch.tv PRIVMSG "+channel+" :@OtherUser This is a reply!";
         }
         return null;
     }
