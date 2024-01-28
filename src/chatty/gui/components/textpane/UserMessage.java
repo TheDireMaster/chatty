@@ -25,6 +25,12 @@ public class UserMessage extends Message {
     public boolean highlighted;
     public boolean ignored_compact;
     public boolean action;
+    public Object colorSource;
+    public Object highlightSource;
+    public Object ignoreSource;
+    public Object routingSource;
+    public User localUser;
+    public long historicTimeStamp;
     
     public UserMessage(User user, String text, Emoticons.TagEmotes emotes,
             String id, int bits, List<Match> highlightMatches,
@@ -34,5 +40,23 @@ public class UserMessage extends Message {
         this.emotes = emotes;
         this.bits = bits;
         this.tags = tags;
+        this.historicTimeStamp  = -1; // keep -1 as default for current timestamp
     }
+    
+    public UserMessage copy() {
+        UserMessage result = new UserMessage(user, text, emotes, id, bits, highlightMatches, replaceMatches, replacement, tags);
+        result.color = color;
+        result.backgroundColor = backgroundColor;
+        result.whisper = whisper;
+        result.highlighted = highlighted;
+        result.ignored_compact = ignored_compact;
+        result.action = action;
+        result.colorSource = colorSource;
+        result.highlightSource = highlightSource;
+        result.ignoreSource = ignoreSource;
+        result.routingSource = routingSource;
+        result.localUser = localUser;
+        return result;
+    }
+    
 }

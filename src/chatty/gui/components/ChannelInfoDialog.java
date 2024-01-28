@@ -2,10 +2,13 @@
 package chatty.gui.components;
 
 import chatty.Chatty;
+import chatty.gui.DockedDialogHelper;
+import chatty.gui.DockedDialogManager;
 import chatty.gui.GuiUtil;
 import chatty.gui.LinkListener;
 import chatty.gui.UrlOpener;
 import chatty.gui.components.admin.StatusHistoryEntry;
+import chatty.gui.components.menus.ContextMenuAdapter;
 import chatty.gui.components.menus.ContextMenuListener;
 import chatty.lang.Language;
 import chatty.util.DateTime;
@@ -13,20 +16,24 @@ import static chatty.util.DateTime.H;
 import static chatty.util.DateTime.S;
 import chatty.util.MiscUtil;
 import chatty.util.StringUtil;
-import chatty.util.api.StreamTagManager.StreamTag;
 import chatty.util.api.StreamInfo;
 import chatty.util.api.StreamInfo.StreamType;
 import chatty.util.api.StreamInfoHistoryItem;
+import chatty.util.dnd.DockContent;
+import chatty.util.dnd.DockContentContainer;
+import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Frame;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.Window;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.awt.event.ComponentListener;
+import java.awt.event.ItemEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
@@ -39,13 +46,17 @@ import javax.swing.*;
  */
 public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener {
 
-    private static final String STATUS_LABEL_TEXT = Language.getString("channelInfo.status")+":";
-    private static final String STATUS_LABEL_TEXT_HISTORY = Language.getString("channelInfo.history")+":";
-    
     private static final String GAME_LABEL_TEXT = Language.getString("channelInfo.playing")+":";
     private static final String GAME_LABEL_TEXT_VOD = "VOD / "+Language.getString("channelInfo.playing")+":";
     
-    private final JLabel statusLabel = new JLabel(STATUS_LABEL_TEXT);
+    private final JLabel statusLabel = new JLabel() {
+        
+        @Override
+        public Dimension getMinimumSize() {
+            return new Dimension(1, super.getMinimumSize().height);
+        }
+        
+    };
     private final ExtendedTextPane title = new ExtendedTextPane();
     
     private final JLabel onlineSince = new JLabel();
@@ -56,7 +67,6 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
     
 //    private final LinkLabel communityLabel;
     private final LinkLabel testLabel = new LinkLabel(null, null);
-    private List<StreamTag> communities;
     
     private final JLabel historyLabel = new JLabel(Language.getString("channelInfo.viewers")+":");
     private final ViewerHistory history = new ViewerHistory();
@@ -66,27 +76,31 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
     private String statusText = "";
     private String gameText = "";
     
+    private final DockedDialogHelper helper;
+    
     /**
      * The time the stream of the current StreamInfo started. This is -1 if the
      * stream is offline or the StreamInfo is invalid, or no time was received.
      */
     private long timeStarted = -1;
     
-    public ChannelInfoDialog(Frame owner) {
+    public ChannelInfoDialog(Frame owner, DockedDialogManager dockedDialogs) {
         super(owner);
         
-        setLayout(new GridBagLayout());
+        JPanel mainPanel = new JPanel(new GridBagLayout());
         
         GridBagConstraints gbc;
         
         // Status
         gbc = makeGbc(0,0,1,1);
         gbc.anchor = GridBagConstraints.WEST;
-        add(statusLabel,gbc);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 0.5;
+        mainPanel.add(statusLabel,gbc);
         
         gbc = makeGbc(1,0,1,1);
         gbc.anchor = GridBagConstraints.EAST;
-        add(onlineSince, gbc);
+        mainPanel.add(onlineSince, gbc);
         
         title.setEditable(false);
         title.setLinkListener(new MyLinkListener());
@@ -97,17 +111,17 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
         gbc = makeGbc(0,1,2,1);
         gbc.weighty = 0;
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        add(scroll,gbc);
+        mainPanel.add(scroll,gbc);
 
         // Game
         gbc = makeGbc(0,2,1,1);
         gbc.anchor = GridBagConstraints.WEST;
-        add(gameLabel,gbc);
+        mainPanel.add(gameLabel,gbc);
         
         game.setEditable(false);
         gbc = makeGbc(0,3,2,1);
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        add(game,gbc);
+        mainPanel.add(game,gbc);
         
         gbc = makeGbc(0, 2, 2, 1);
         gbc.anchor = GridBagConstraints.EAST;
@@ -164,7 +178,7 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
         gbc = makeGbc(0,4,1,1);
         gbc.insets = new Insets(3,5,3,3);
         gbc.anchor = GridBagConstraints.WEST;
-        add(historyLabel,gbc);
+        mainPanel.add(historyLabel,gbc);
         
         history.setListener(this);
         history.setForegroundColor(game.getForeground());
@@ -176,7 +190,53 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
         gbc.insets = new Insets(4,4,4,4);
         gbc.weightx = 1;
         gbc.weighty = 1;
-        add(history,gbc);
+        mainPanel.add(history,gbc);
+        
+        add(mainPanel);
+        
+        if (dockedDialogs != null) {
+            DockContent content = dockedDialogs.createContent(mainPanel, "Channel Info", "-channelInfo-");
+            helper = dockedDialogs.createHelper(new DockedDialogHelper.DockedDialog() {
+                @Override
+                public void setVisible(boolean visible) {
+                    ChannelInfoDialog.super.setVisible(visible);
+                }
+
+                @Override
+                public boolean isVisible() {
+                    return ChannelInfoDialog.super.isVisible();
+                }
+
+                @Override
+                public void addComponent(Component comp) {
+                    add(comp);
+                }
+
+                @Override
+                public void removeComponent(Component comp) {
+                    remove(comp);
+                }
+
+                @Override
+                public Window getWindow() {
+                    return ChannelInfoDialog.this;
+                }
+
+                @Override
+                public DockContent getContent() {
+                    return content;
+                }
+                
+                @Override
+                public void dockedChanged() {
+                    updateDocked();
+                }
+            });
+            helper.installContextMenu(mainPanel);
+        }
+        else {
+            helper = null;
+        }
         
         Timer timer = new Timer(30000, new ActionListener() {
 
@@ -192,6 +252,35 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
         setMinimumSize(new Dimension(200,0));
         
         GuiUtil.installEscapeCloseOperation(this);
+    }
+    
+    @Override
+    public void setVisible(boolean visible) {
+        if (helper != null) {
+            helper.setVisible(visible, true);
+        }
+        else {
+            super.setVisible(visible);
+        }
+    }
+    
+    @Override
+    public boolean isVisible() {
+        if (helper != null) {
+            return helper.isVisible();
+        }
+        else {
+            return super.isVisible();
+        }
+    }
+    
+    @Override
+    public void setTitle(String title) {
+        super.setTitle(title);
+        if (helper != null) {
+            // TODO: Separate way to enable/disable extra title, because this could also be useful for dialog/window title
+//            helper.getContent().setLongTitle(title);
+        }
     }
     
     /**
@@ -214,14 +303,12 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
             }
             timeStarted = streamInfo.getTimeStarted();
             onlineSince.setText(null);
-            setCommunities(streamInfo.getCommunities());
             updateStreamType(streamInfo.getStreamType());
         }
         else if (streamInfo.isValid()) {
             statusText = Language.getString("channelInfo.streamOffline");
             gameText = "";
             timeStarted = -1;
-            setCommunities(null);
         }
         else {
             statusText = Language.getString("channelInfo.noInfo");
@@ -229,7 +316,6 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
             timeStarted = -1;
             onlineSince.setText(null);
             onlineSince.setToolTipText(null);
-            setCommunities(null);
         }
         title.setText(statusText);
         game.setText(gameText);
@@ -239,6 +325,7 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
         }
         currentStreamInfo = streamInfo;
         updateOnlineTime(streamInfo);
+        updateStatusLabel();
     }
     
     /**
@@ -251,15 +338,6 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
         if (streamInfo == currentStreamInfo) {
             set(streamInfo);
         }
-    }
-    
-    private void setCommunities(List<StreamTag> c) {
-        if (c != null && c.contains(null)) {
-            // This usually shouldn't contain null elements, but just in case
-            c = new ArrayList<>(c);
-            c.removeIf(e -> { return e == null; });
-        }
-        communities = c;
     }
     
     private void updateCommunities() {
@@ -346,7 +424,7 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
     }
     
     private void updateOnlineTime(StreamInfoHistoryItem item) {
-        updateOnlineTime(item.getStreamDuration(), item.getStreamDurationWithPicnic(), item.getTime());
+        updateOnlineTime(item.getStreamStartTime(), item.getStreamStartTimeWithPicnic(), item.getTime());
     }
     
     private void updateOnlineTime(long started, long withPicnic, long current) {
@@ -361,6 +439,31 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
                         formatTime(started, current)));
                 onlineSince.setToolTipText(Language.getString("channelInfo.uptime.tip",
                         DateTime.formatFullDatetime(timeStarted)));
+            }
+        }
+    }
+    
+    private void updateStatusLabel() {
+        if (helper != null && helper.isDocked() && currentStreamInfo != null) {
+            if (historyItemSelected) {
+                statusLabel.setText(String.format("%s (%s):",
+                        Language.getString("channelInfo.history"),
+                        currentStreamInfo.stream));
+            }
+            else {
+                statusLabel.setText(String.format("%s (%s):",
+                        Language.getString("channelInfo.status"),
+                        currentStreamInfo.stream));
+            }
+        }
+        else {
+            if (historyItemSelected) {
+                statusLabel.setText(String.format("%s:",
+                        Language.getString("channelInfo.history")));
+            }
+            else {
+                statusLabel.setText(String.format("%s:",
+                        Language.getString("channelInfo.status")));
             }
         }
     }
@@ -388,10 +491,9 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
         historyItemSelected = true;
         title.setText(item.getTitle());
         game.setText(item.getGame());
-        statusLabel.setText(STATUS_LABEL_TEXT_HISTORY);
+        updateStatusLabel();
         updateStreamType(item.getStreamType());
         updateOnlineTime(item);
-        setCommunities(item.getCommunities());
         updateCommunities();
     }
     
@@ -400,10 +502,9 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
         historyItemSelected = false;
         this.title.setText(statusText);
         this.game.setText(gameText);
-        statusLabel.setText(STATUS_LABEL_TEXT);
+        updateStatusLabel();
         updateStreamType(currentStreamInfo.getStreamType());
         updateOnlineTime(currentStreamInfo);
-        setCommunities(currentStreamInfo.getCommunities());
         updateCommunities();
     }
     
@@ -415,8 +516,21 @@ public class ChannelInfoDialog extends JDialog implements ViewerHistoryListener 
         history.setVerticalZoom(verticalZoom);
     }
     
+    public void updateDocked() {
+        history.setDocked(helper.isDocked());
+        updateStatusLabel();
+    }
+    
     public void addContextMenuListener(ContextMenuListener listener) {
-        history.addContextMenuListener(listener);
+        history.addContextMenuListener(new ContextMenuAdapter(listener) {
+            
+            @Override
+            public void menuItemClicked(ActionEvent e) {
+                super.menuItemClicked(e);
+                helper.menuAction(e);
+            }
+            
+        });
         title.setContextMenuListener(listener);
     }
     

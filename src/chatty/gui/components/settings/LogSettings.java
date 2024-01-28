@@ -10,6 +10,7 @@ import static chatty.gui.components.settings.MessageSettings.addTimestampFormat;
 import chatty.lang.Language;
 import chatty.util.chatlog.ChatLog;
 import chatty.util.commands.CustomCommand;
+import chatty.util.irc.IrcBadges;
 import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -123,9 +124,7 @@ public class LogSettings extends SettingsPanel {
                     User user = new User("testuser", "テストユーザー", Room.createRegular("#testchannel"));
                     user.setId("123456");
                     user.setSubscriber(true);
-                    Map<String, String> badges = new LinkedHashMap<>();
-                    badges.put("subscriber", "12");
-                    user.setTwitchBadges(badges);
+                    user.setTwitchBadges(IrcBadges.parse("subscriber/12"));
                     String normalResult = command.replace(ChatLog.messageParam(
                             user,
                             "Hello, good day! :)",
@@ -142,13 +141,9 @@ public class LogSettings extends SettingsPanel {
                             "[12:34:56]"));
                     
                     // More badges
-                    badges.clear();
-                    badges.put("vip", "1");
-                    badges.put("founder", "0");
-                    badges.put("premium", "1");
                     user = new User("TestName", Room.createRegular("#testchannel"));
                     user.setId("123457");
-                    user.setTwitchBadges(badges);
+                    user.setTwitchBadges(IrcBadges.parse("vip/1,founder/0,premium/1"));
                     user.setVip(true);
                     user.setSubscriber(true);
                     user.setTurbo(true);
@@ -218,10 +213,12 @@ public class LogSettings extends SettingsPanel {
                 d.makeGbcCloser(0, 0, 1, 1, GridBagConstraints.WEST));
         extraPanel.add(d.addSimpleBooleanSetting("logIgnored2"),
                 d.makeGbcCloser(0, 1, 1, 1, GridBagConstraints.WEST));
+        extraPanel.add(new JLabel("<html><body style='width:140px;'>"+Language.getString("settings.customTabSettings.logInfo2")),
+                d.makeGbc(0, 2, 1, 1, GridBagConstraints.WEST));
 
         JPanel otherSettings = createTitledPanel(Language.getString("settings.log.section.other"));
         
-        PathSetting logPath = new PathSetting(d, Chatty.getUserDataDirectory()+"logs");
+        PathSetting logPath = new PathSetting(d, Chatty.getDefaultPath(Chatty.PathType.LOGS).toString());
         d.addStringSetting("logPath", logPath);
         otherSettings.add(new JLabel(Language.getString("settings.log.folder")),
                 d.makeGbc(0, 0, 1, 1, GridBagConstraints.NORTHWEST));
@@ -319,30 +316,4 @@ public class LogSettings extends SettingsPanel {
         info.setText("<html><body style='width: 200px;text-align:center;'>"+infoText);
         cardManager.show(cards, switchTo);
     }
-    
-    private static class ChannelFormatter implements DataFormatter<String> {
-
-        /**
-         * Prepends the input with a "#" if not already present. Returns
-         * {@code null} if the length after prepending is only 1, which means
-         * it only consists of the "#" and is invalid.
-         * 
-         * @param input The input to be formatted
-         * @return The formatted input, which has the "#" prepended, or
-         * {@code null} or any empty String if the input was invalid
-         */
-        @Override
-        public String format(String input) {
-            if (input != null && !input.isEmpty() && !input.startsWith("#")
-                    && !input.startsWith("$")) {
-                input = "#"+input;
-            }
-            if (input.length() == 1) {
-                input = null;
-            }
-            return input;
-        }
-        
-    }
-    
 }

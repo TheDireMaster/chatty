@@ -2,6 +2,7 @@
 package chatty.util.api;
 
 import chatty.Helper;
+import chatty.util.api.CachedImage.ImageType;
 import java.awt.Color;
 import java.util.Objects;
 import java.util.Set;
@@ -56,7 +57,7 @@ public class CheerEmoticon extends Emoticon {
     }
     
     @Override
-    public String getEmoteUrl(int factor) {
+    public String getEmoteUrl(int factor, ImageType imageType) {
         return getUrl(currentBackground, currentState, String.valueOf(factor));
     }
     

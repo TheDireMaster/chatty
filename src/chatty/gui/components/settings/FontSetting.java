@@ -41,6 +41,7 @@ public class FontSetting extends JPanel {
     private final StringSetting fontSetting;
     private final LongSetting fontSizeSetting;
     private final SettingType settingType;
+    private FontChooser fontChooser;
     
     private String fontSettingValue;
     private int fontSizeSettingValue;
@@ -62,7 +63,7 @@ public class FontSetting extends JPanel {
         fontSizeField = new JTextField(3);
         fontSizeField.setEditable(false);
         editButton = new JButton(Language.getString("dialog.button.change"));
-        editButton.setMargin(GuiUtil.SMALL_BUTTON_INSETS);
+        GuiUtil.smallButtonInsets(editButton);
         
         setLayout(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
@@ -83,8 +84,10 @@ public class FontSetting extends JPanel {
         String[] fonts = optionRestrictedFonts
                 ? new String[]{Font.DIALOG, Font.DIALOG_INPUT, Font.MONOSPACED, Font.SERIF, Font.SANS_SERIF}
                 : null;
-        FontChooser fontChooser = new FontChooser(parent, fonts, !optionNoStyle);
         editButton.addActionListener(e -> {
+            if (fontChooser == null) {
+                fontChooser = new FontChooser(parent, fonts, !optionNoStyle);
+            }
             String info = optionRestrictedFonts ? Language.getString("settings.otherFonts.restrictedInfo") : null;
             int result = fontChooser.showDialog(current, info);
             if (result == FontChooser.ACTION_OK) {

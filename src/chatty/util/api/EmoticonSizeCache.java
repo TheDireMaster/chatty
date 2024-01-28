@@ -2,6 +2,7 @@
 package chatty.util.api;
 
 import chatty.Chatty;
+import chatty.Chatty.PathType;
 import java.awt.Dimension;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -9,7 +10,6 @@ import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.logging.Logger;
@@ -22,7 +22,7 @@ public class EmoticonSizeCache {
     
     private static final Logger LOGGER = Logger.getLogger(EmoticonSizeCache.class.getName());
     
-    private static final Path FILE = Paths.get(Chatty.getCacheDirectory() + "emoticon_sizes");
+    private static final Path FILE = Chatty.getPathCreate(PathType.CACHE).resolve("emoticon_sizes");
     
     private static final Map<String, Dimension> data = new HashMap<>();
     private static final Charset CHARSET = Charset.forName("UTF-8");
@@ -33,6 +33,10 @@ public class EmoticonSizeCache {
     
     public synchronized static Dimension getSize(String id) {
         return data.get(id);
+    }
+    
+    public synchronized static void removeSize(String id) {
+        data.remove(id);
     }
     
     public synchronized static void saveToFile() {

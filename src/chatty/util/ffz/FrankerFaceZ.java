@@ -9,6 +9,7 @@ import chatty.util.UrlRequest;
 import chatty.util.api.Emoticon;
 import chatty.util.api.EmoticonUpdate;
 import chatty.util.api.TwitchApi;
+import chatty.util.api.usericons.UsericonFactory;
 import chatty.util.settings.Settings;
 import java.util.*;
 import java.util.logging.Logger;
@@ -31,6 +32,9 @@ public class FrankerFaceZ {
     
     // State
     private boolean botNamesRequested;
+    private String botBadgeId = null;
+    // stream -> roomBadges(badgeId -> names)
+    private final Map<String, Map<String, Set<String>>> roomBadgeUsernames = new HashMap<>();
 
     /**
      * Feature Friday
@@ -248,9 +252,20 @@ public class FrankerFaceZ {
         } else if (type == Type.ROOM) {
             // If type is ROOM, stream should be available
             emotes = FrankerFaceZParsing.parseRoomEmotes(result, stream);
-            Usericon modIcon = FrankerFaceZParsing.parseModIcon(result, stream);
-            if (modIcon != null) {
-                usericons.add(modIcon);
+            addRoomBadgeUsernames(stream, FrankerFaceZParsing.parseRoomBadges(result));
+            String modIconUrl = FrankerFaceZParsing.parseCustomBadge(result, stream, "mod_urls", "1");
+            String modIconUrl2 = FrankerFaceZParsing.parseCustomBadge(result, stream, "mod_urls", "2");
+            if (modIconUrl != null) {
+                // With added color
+                usericons.add(UsericonFactory.createTwitchLikeIcon(Usericon.Type.MOD,
+                        stream, modIconUrl, modIconUrl2, Usericon.SOURCE_FFZ, "Moderator (FFZ)"));
+            }
+            String vipIconUrl = FrankerFaceZParsing.parseCustomBadge(result, stream, "vip_badge", "1");
+            String vipIconUrl2 = FrankerFaceZParsing.parseCustomBadge(result, stream, "vip_badge", "2");
+            if (vipIconUrl != null) {
+                // Just the badge, with no added color
+                usericons.add(UsericonFactory.createIconFromUrl(Usericon.Type.VIP,
+                        stream, vipIconUrl, vipIconUrl2, Usericon.SOURCE_FFZ, null, "VIP (FFZ)"));
             }
         } else if (type == Type.FEATURE_FRIDAY) {
             emotes = FrankerFaceZParsing.parseSetEmotes(result, Emoticon.SubType.FEATURE_FRIDAY, null);
@@ -267,14 +282,19 @@ public class FrankerFaceZ {
         }
         
         // Package accordingly and send the result to the listener
-        EmoticonUpdate emotesUpdate;
+        EmoticonUpdate.Builder updateBuilder = new EmoticonUpdate.Builder(emotes);
+        updateBuilder.setTypeToRemove(Emoticon.Type.FFZ);
         if (type == Type.FEATURE_FRIDAY) {
-            emotesUpdate = new EmoticonUpdate(emotes, Emoticon.Type.FFZ,
-                     Emoticon.SubType.FEATURE_FRIDAY, null, null);
-        } else {
-            emotesUpdate = new EmoticonUpdate(emotes);
+            updateBuilder.setSubTypeToRemove(Emoticon.SubType.FEATURE_FRIDAY);
         }
-        listener.channelEmoticonsReceived(emotesUpdate);
+        else if (type == Type.ROOM) {
+            updateBuilder.setSubTypeToRemove(Emoticon.SubType.REGULAR);
+            updateBuilder.setRoomToRemove(stream);
+        }
+        else if (type == Type.GLOBAL) {
+            updateBuilder.setSubTypeToRemove(Emoticon.SubType.REGULAR);
+        }
+        listener.channelEmoticonsReceived(updateBuilder.build());
         // Return icons if mod icon was found (will be empty otherwise)
         listener.usericonsReceived(usericons);
     }
@@ -337,11 +357,10 @@ public class FrankerFaceZ {
      * Send a message to the listener to clear all FFZ Feature Friday emotes.
      */
     private void clearFeatureFridayEmotes() {
-        listener.channelEmoticonsReceived(new EmoticonUpdate(null,
-                Emoticon.Type.FFZ,
-                Emoticon.SubType.FEATURE_FRIDAY,
-                null,
-                null));
+        EmoticonUpdate.Builder updateBuilder = new EmoticonUpdate.Builder(null);
+        updateBuilder.setTypeToRemove(Emoticon.Type.FFZ);
+        updateBuilder.setSubTypeToRemove(Emoticon.SubType.FEATURE_FRIDAY);
+        listener.channelEmoticonsReceived(updateBuilder.build());
     }
 
     /**
@@ -354,8 +373,55 @@ public class FrankerFaceZ {
             if (result != null && responseCode == 200) {
                 Set<String> botNames = FrankerFaceZParsing.getBotNames(result);
                 LOGGER.info("|[FFZ Bots] Found " + botNames.size() + " names");
-                listener.botNamesReceived(botNames);
+                listener.botNamesReceived(null, botNames);
+                synchronized(roomBadgeUsernames) {
+                    // Find bot badge id, so it can be used for room badges
+                    botBadgeId = FrankerFaceZParsing.getBotBadgeId(result);
+                }
+                updateRoomBotNames();
             }
         });
     }
+    
+    /**
+     * Cache room badges, so bot names can be retrieved from it.
+     * 
+     * @param stream
+     * @param names 
+     */
+    private void addRoomBadgeUsernames(String stream, Map<String, Set<String>> names) {
+        if (stream == null || names == null || names.isEmpty()) {
+            return;
+        }
+        synchronized(roomBadgeUsernames) {
+            roomBadgeUsernames.put(stream, names);
+        }
+        updateRoomBotNames();
+    }
+    
+    /**
+     * Check the cached room badges for the bot badge id and add the bot names
+     * if present. Clear cached badges afterwards since they don't have any
+     * other use at the moment.
+     */
+    private void updateRoomBotNames() {
+        Map<String, Set<String>> result = new HashMap<>();
+        synchronized (roomBadgeUsernames) {
+            if (botBadgeId != null) {
+                for (Map.Entry<String, Map<String, Set<String>>> room : roomBadgeUsernames.entrySet()) {
+                    String stream = room.getKey();
+                    Set<String> names = room.getValue().get(botBadgeId);
+                    if (names != null) {
+                        result.put(stream, names);
+                    }
+                }
+                roomBadgeUsernames.clear();
+            }
+        }
+        for (Map.Entry<String, Set<String>> entry : result.entrySet()) {
+            LOGGER.info("|[FFZ Bots] ("+entry.getKey()+"): Found " + entry.getValue().size() + " names");
+            listener.botNamesReceived(entry.getKey(), entry.getValue());
+        }
+    }
+    
 }

@@ -19,62 +19,12 @@ public class ChannelInfoManager {
     
     private static final Logger LOGGER = Logger.getLogger(ChannelInfoManager.class.getName());
     
-    private static final int CACHED_EXPIRE_TIME = 10*60*1000;
-    
-    private final Map<String, ChannelInfo> cachedChannelInfo =
-            Collections.synchronizedMap(new HashMap<String, ChannelInfo>());
-    
     private final TwitchApi api;
     private final TwitchApiResultListener listener;
     
     public ChannelInfoManager(TwitchApi api, TwitchApiResultListener listener) {
         this.api = api;
         this.listener = listener;
-    }
-    
-    public ChannelInfo getOnlyCachedChannelInfo(String stream) {
-        return cachedChannelInfo.get(stream);
-    }
-    
-    public ChannelInfo getCachedChannelInfo(String stream, String id) {
-        ChannelInfo info = cachedChannelInfo.get(stream);
-        if (info != null) {
-            if (System.currentTimeMillis() - info.time > CACHED_EXPIRE_TIME) {
-                api.getChannelInfo(stream, id);
-            }
-            return info;
-        }
-        api.getChannelInfo(stream, id);
-        return null;
-    }
-    
-    /**
-     * Handle the ChannelInfo request result, which can also be from changing
-     * the channel info.
-     * 
-     * @param result The JSON received
-     * @param responseCode The HTTP response code of the request
-     */
-    protected void handleChannelInfoResult(boolean put, String result,
-            int responseCode, String stream) {
-        // Handle requested ChannelInfo but also the result of changing
-        // channel info, since that returns ChannelInfo as well.
-        if (result == null || responseCode != 200) {
-            handleChannelInfoResultError(stream, put, responseCode);
-            return;
-        }
-        // Request should have gone through fine
-        ChannelInfo info = parseChannelInfo(result);
-        if (info == null) {
-            LOGGER.warning("Error parsing channel info: " + result);
-            handleChannelInfoResultError(stream, put, responseCode);
-            return;
-        }
-        if (put) {
-            listener.putChannelInfoResult(TwitchApi.RequestResultCode.SUCCESS);
-        }
-        listener.receivedChannelInfo(stream, info, TwitchApi.RequestResultCode.SUCCESS);
-        cachedChannelInfo.put(stream, info);
     }
     
     /**
@@ -96,17 +46,17 @@ public class ChannelInfoManager {
             // The result of changing channel info requires some extra
             // handling, because it can have different response codes.
             if (responseCode == 404) {
-                listener.putChannelInfoResult(TwitchApi.RequestResultCode.NOT_FOUND);
+                listener.putChannelInfoResult(TwitchApi.RequestResultCode.NOT_FOUND, null);
             } else if (responseCode == 401 || responseCode == 403) {
                 LOGGER.warning("Error setting channel info: Access denied");
-                listener.putChannelInfoResult(TwitchApi.RequestResultCode.ACCESS_DENIED);
+                listener.putChannelInfoResult(TwitchApi.RequestResultCode.ACCESS_DENIED, null);
                 api.accessDenied();
             } else if (responseCode == 422) {
                 LOGGER.warning("Error setting channel info: Probably invalid title");
-                listener.putChannelInfoResult(TwitchApi.RequestResultCode.INVALID_STREAM_STATUS);
+                listener.putChannelInfoResult(TwitchApi.RequestResultCode.INVALID_STREAM_STATUS, null);
             } else {
                 LOGGER.warning("Error setting channel info: Unknown error (" + responseCode + ")");
-                listener.putChannelInfoResult(TwitchApi.RequestResultCode.FAILED);
+                listener.putChannelInfoResult(TwitchApi.RequestResultCode.FAILED, null);
             }
         }
     }
@@ -139,7 +89,7 @@ public class ChannelInfoManager {
             } catch (Exception ex) {
                 LOGGER.warning("Error parsing ChannelInfo: "+ex);
             }
-            return new ChannelInfo(name, id, status, game, createdAt, followers,
+            return new ChannelInfo(name, id, createdAt, followers,
                     views, updatedAt, broadcaster_type, description);
         }
         catch (ParseException ex) {
@@ -158,13 +108,11 @@ public class ChannelInfoManager {
      * @param info The ChannelInfo object
      * @return The created JSON
      */
-    protected String makeChannelInfoJson(ChannelInfo info) {
-        JSONObject root = new JSONObject();
-        Map channel = new HashMap();
-        channel.put("status",info.getStatus());
-        channel.put("game",info.getGame());
-        root.put("channel",channel);
-        return root.toJSONString();
+    protected String makeChannelInfoJson(ChannelStatus info) {
+        Map<String, String> channel = new HashMap<>();
+        channel.put("status", info.title);
+        channel.put("game", info.category.name);
+        return JSONUtil.listMapToJSON("channel", channel);
     }
     
 }

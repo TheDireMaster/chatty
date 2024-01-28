@@ -35,11 +35,39 @@ public class ModLogInfo extends InfoMessage {
         this.ownAction = ownAction;
     }
     
+    public ModLogInfo(ModLogInfo other) {
+        super(other);
+        data = other.data;
+        showActionBy = other.showActionBy;
+        ownAction = other.ownAction;
+        chan = other.chan;
+    }
+    
+    @Override
+    public ModLogInfo copy() {
+        return new ModLogInfo(this);
+    }
+    
     private static String makeText(ModeratorActionData data) {
         return String.format("[ModAction] %s: /%s %s",
                 data.created_by,
                 data.moderation_action,
-                StringUtil.join(data.args, " "));
+                makeArgsText(data));
+    }
+    
+    public static String makeArgsText(ModeratorActionData data) {
+        if (data.type == ModeratorActionData.Type.AUTOMOD_REJECTED && data.args.size() == 3) {
+            return String.format("[%s] <%s> %s",
+                    data.args.get(2), data.args.get(0), data.args.get(1));
+        }
+        if ((data.type == ModeratorActionData.Type.AUTOMOD_APPROVED || data.type == ModeratorActionData.Type.AUTOMOD_DENIED) && data.args.size() > 1) {
+            return String.format("<%s> %s",
+                    data.args.get(0), data.args.get(1));
+        }
+        if (data.moderation_action.equals("delete") && data.args.size() > 1) {
+            return String.format("%s (%s)", data.args.get(0), data.args.get(1));
+        }
+        return StringUtil.join(data.args, " ");
     }
     
     @Override

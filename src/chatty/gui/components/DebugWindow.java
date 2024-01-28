@@ -30,7 +30,9 @@ public class DebugWindow extends JFrame {
     private final JTextArea textIrcLog;
     private final JTextArea textFFZLog;
     private final JTextArea textPubSubLog;
+    private final JTextArea textEventSubLog;
     private final JTextArea otherLog;
+    private final JTextArea timerLog;
     
     public DebugWindow(ItemListener listener) {
         setTitle("Debug");
@@ -47,11 +49,18 @@ public class DebugWindow extends JFrame {
         // PubSub WS log
         textPubSubLog = createLogArea();
         
+        // EventSub WS Log
+        textEventSubLog = createLogArea();
+        
         // Other Debug Stuff (Debugging class)
         otherLog = createLogArea();
         Debugging.registerForOutput(line -> {
             SwingUtilities.invokeLater(() -> printLine(otherLog, line));
         });
+        
+        // Timer Log
+        timerLog = createLogArea();
+        
 
         // Tabs
         JTabbedPane tabs = new JTabbedPane();
@@ -59,7 +68,9 @@ public class DebugWindow extends JFrame {
         tabs.addTab("Irc log", new JScrollPane(textIrcLog));
         tabs.addTab("FFZ-WS", new JScrollPane(textFFZLog));
         tabs.addTab("PubSub", new JScrollPane(textPubSubLog));
+        tabs.addTab("EventSub", new JScrollPane(textEventSubLog));
         tabs.addTab("Other", new JScrollPane(otherLog));
+        tabs.addTab("Timers", new JScrollPane(timerLog));
         
         // Settings (Checkboxes)
         logIrc.setToolTipText("Logging IRC traffic can reduce performance");
@@ -104,6 +115,14 @@ public class DebugWindow extends JFrame {
     
     public void printLinePubSub(String line) {
         printLine(textPubSubLog, line);
+    }
+    
+    public void printLineEventSub(String line) {
+        printLine(textEventSubLog, line);
+    }
+    
+    public void printTimerLog(String line) {
+        printLine(timerLog, line);
     }
     
     private void printLine(JTextArea text, String line) {

@@ -10,19 +10,33 @@ import chatty.util.Replacer;
 import chatty.util.StringUtil;
 import chatty.util.api.usericons.Usericon;
 import chatty.util.commands.Parameters;
+import chatty.util.dnd.DockLayout;
 import chatty.util.irc.MsgTags;
 import chatty.util.settings.FileManager.SaveResult;
+import chatty.util.settings.Settings;
+import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.io.UnsupportedEncodingException;
+import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.URL;
 import java.net.URLEncoder;
 import java.text.DecimalFormat;
 import java.text.NumberFormat;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.*;
+import java.util.function.Function;
 import java.util.logging.Logger;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
+import javax.swing.BorderFactory;
+import javax.swing.JButton;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
 
 /**
  * Some Chatty-specific static helper methods.
@@ -40,6 +54,18 @@ public class Helper {
     }
     
     /**
+     * This is a bit ugly since the other functions here don't rely on external
+     * data like this, but it works.
+     */
+    public static ParseChannelHelper parseChannelHelper;
+    
+    public interface ParseChannelHelper {
+        public Collection<String> getFavorites();
+        public Collection<String> getNamesByCategory(String category);
+        public boolean isStreamLive(String stream);
+    }
+    
+    /**
      * Parses comma-separated channels from a String.
      * 
      * @param channels The list channels to parse
@@ -51,14 +77,101 @@ public class Helper {
         Set<String> result = new LinkedHashSet<>();
         for (String part : parts) {
             String channel = part.trim();
+            channel = getChannelFromUrl(channel);
             if (isValidChannel(channel)) {
-                if (prepend && !channel.startsWith("#")) {
-                    channel = "#"+channel;
+                addValidChannel(channel, prepend, result);
+            }
+            else if (channel.startsWith("[") && channel.endsWith("]") && channel.length() > 2 && parseChannelHelper != null) {
+                String[] catSplit = channel.substring(1, channel.length() - 1).split(" ");
+                String cat = catSplit[0];
+                boolean noChans = false;
+                boolean onlyChans = false;
+                boolean onlyLive = false;
+                for (int i = 1; i < catSplit.length; i++) {
+                    if (catSplit[i].equals("#")) {
+                        onlyChans = true;
+                    }
+                    else if (catSplit[i].equals("!#")) {
+                        noChans = true;
+                    }
+                    else if (catSplit[i].equals("live")) {
+                        onlyLive = true;
+                    }
                 }
-                result.add(StringUtil.toLowerCase(channel));
+                List<String> chans = new ArrayList<>();
+                if (cat.equals("*")) {
+                    chans = new ArrayList<>(parseChannelHelper.getFavorites());
+                }
+                else {
+                    for (String name : parseChannelHelper.getNamesByCategory(cat)) {
+                        if ((!noChans || !name.startsWith("#"))
+                                && (!onlyChans || name.startsWith("#"))) {
+                            chans.add(name);
+                        }
+                    }
+                }
+                for (String chan : chans) {
+                    if (!onlyLive || parseChannelHelper.isStreamLive(Helper.toStream(chan))) {
+                        addValidChannel(chan, prepend, result);
+                    }
+                }
             }
         }
         return result;
+    }
+    
+    private static void addValidChannel(String channel, boolean prepend, Collection<String> collection) {
+        if (isValidChannel(channel)) {
+            if (prepend && !channel.startsWith("#")) {
+                channel = "#" + channel;
+            }
+            collection.add(StringUtil.toLowerCase(channel));
+        }
+    }
+    
+    /**
+     * Get the channel name from a Twitch url such as twitch.tv/channel_name and
+     * some variants.
+     * 
+     * @param url The url or other input String
+     * @return The channel name from the URL, or the input String if it doesn't
+     * match an expected format
+     */
+    public static String getChannelFromUrl(String url) {
+        Matcher m = CHANNEL_URL_PATTERN.matcher(url);
+        if (m.matches()) {
+            String channel = m.group(1);
+            if (channel.equals("popout")) {
+                TwitchPopoutUrlInfo popoutInfo = getPopoutUrlInfo(url);
+                if (popoutInfo != null) {
+                    return popoutInfo.channel;
+                }
+            }
+            return channel;
+        }
+        return url;
+    }
+    
+    public static TwitchPopoutUrlInfo getPopoutUrlInfo(String url) {
+        Matcher m = POPOUT_URL_PATTERN.matcher(url);
+        if (m.matches()) {
+            return new TwitchPopoutUrlInfo(m.group(1), m.group(2), m.group(3));
+        }
+        return null;
+    }
+    
+    public static class TwitchPopoutUrlInfo {
+        
+        public final String channel;
+        public final String type;
+        public final String username;
+        
+        private TwitchPopoutUrlInfo(String channel, String type, String username) {
+            this.channel = channel;
+            this.type = type;
+            this.username = username;
+        }
+        
     }
     
     public static String[] parseChannels(String channels, boolean prepend) {
@@ -90,6 +203,11 @@ public class Helper {
     public static final Pattern CHANNEL_PATTERN = Pattern.compile("(?i)^#?"+USERNAME_REGEX+"$");
     public static final Pattern CHATROOM_PATTERN = Pattern.compile("(?i)^#?chatrooms:[0-9a-z-:]+$");
     public static final Pattern STREAM_PATTERN = Pattern.compile("(?i)^"+USERNAME_REGEX+"$");
+    public static final Pattern WHISPER_PATTERN = Pattern.compile("(?i)^\\$"+USERNAME_REGEX+"$");
+    private static final String TWITCH_URL_PREFIX = "(?:https?://)?(?:www\\.)?twitch\\.tv";
+    private static final Pattern CHANNEL_URL_PATTERN = Pattern.compile(TWITCH_URL_PREFIX+"/("+USERNAME_REGEX+")[/a-zA-Z0-9_]*");
+    private static final Pattern POPOUT_URL_PATTERN = Pattern.compile(String.format("%s/popout/(%s)/([a-z]+)(?:/(%s)[/a-z]*)?",
+            TWITCH_URL_PREFIX, USERNAME_REGEX, USERNAME_REGEX));
     
     /**
      * Kind of relaxed valiadation if a channel, which can have a leading # or
@@ -160,6 +278,14 @@ public class Helper {
         }
     }
     
+    public static boolean isValidWhisperChannel(String channel) {
+        try {
+            return WHISPER_PATTERN.matcher(channel).matches();
+        } catch (PatternSyntaxException | NullPointerException ex) {
+            return false;
+        }
+    }
+    
     /**
      * Checks if the given stream/channel is valid and turns it into a channel
      * if necessary (leading # and all lowercase). Can also be a chatroom.
@@ -226,6 +352,14 @@ public class Helper {
         String[] result = new String[channels.length];
         for (int i=0;i<channels.length;i++) {
             result[i] = toStream(channels[i]);
+        }
+        return result;
+    }
+    
+    public static Collection<String> toStream(Collection<String> channels) {
+        List<String> result = new ArrayList<>();
+        for (String channel : channels) {
+            result.add(toStream(channel));
         }
         return result;
     }
@@ -573,6 +707,21 @@ public class Helper {
         return url;
     }
     
+    /**
+     * Return the created URL or null if the given URL is invalid.
+     * 
+     * @param url
+     * @return 
+     */
+    public static URL createUrlNoError(String url) {
+        try {
+            return new URL(url);
+        }
+        catch (MalformedURLException ex) {
+            return null;
+        }
+    }
+    
     public static String systemInfo() {
         return String.format("Java: %s (%s / %s) OS: %s (%s/%s) Locale: %s",
                 System.getProperty("java.version"),
@@ -730,29 +879,13 @@ public class Helper {
         return null;
     }
     
-    private static final Map<String, String> EMPTY_BADGES = Collections.unmodifiableMap(new LinkedHashMap<String, String>());
-    
-    /**
-     * Parses the badges tag. The resulting map is unmodifiable.
-     * 
-     * @param data
-     * @return 
-     */
-    public static Map<String, String> parseBadges(String data) {
-        if (data == null || data.isEmpty()) {
-            return EMPTY_BADGES;
+    public static short parseShort(String input, short defaultValue) {
+        try {
+            return Short.parseShort(input);
         }
-        LinkedHashMap<String, String> result = new LinkedHashMap<>();
-        String[] badges = data.split(",");
-        for (String badge : badges) {
-            String[] split = badge.split("/");
-            if (split.length == 2) {
-                String id = split[0];
-                String version = split[1];
-                result.put(id, version);
-            }
+        catch (NumberFormatException ex) {
+            return defaultValue;
         }
-        return Collections.unmodifiableMap(result);
     }
     
     public static String makeDisplayNick(User user, long displayNamesMode) {
@@ -815,11 +948,55 @@ public class Helper {
         return result;
     }
     
+    public static String ESCAPE_FOR_CHAIN_COMMAND = "escape-pipe";
+    
+    public static String escapeForChainCommand(String input) {
+        if (input == null) {
+            return null;
+        }
+        return input.replaceAll("(\\|+)", "$1|");
+    }
+    
+    public static String[] getForeachParams(String input) {
+        if (StringUtil.isNullOrEmpty(input)) {
+            return new String[2];
+        }
+        // A '>' not preceeded or followed by '>'
+        String[] split = input.split("(?<!>)>(?!>)", 2);
+        String list = null;
+        String command = null;
+        Function<String, String> prepare = s -> s.trim().replaceAll(">(>+)", "$1");
+        if (!split[0].trim().isEmpty()) {
+            list = prepare.apply(split[0]);
+        }
+        if (split.length == 2 && !split[1].trim().isEmpty()) {
+            command = prepare.apply(split[1]);
+        }
+        return new String[]{list, command};
+    }
+    
+    public static String ESCAPE_FOR_FOREACH_COMMAND = "escape-greater";
+    
+    public static String escapeForForeachCommand(String input) {
+        if (input == null) {
+            return null;
+        }
+        return input.replaceAll("(>+)", "$1>");
+    }
+    
     public static void addUserParameters(User user, String msgId, String autoModMsgId, Parameters parameters) {
-        parameters.put("nick", user.getRegularDisplayNick());
         if (msgId != null) {
             parameters.put("msg-id", msgId);
-            parameters.put("msg", user.getMessageText(msgId));
+            User.TextMessage m = user.getMessage(msgId);
+            if (m != null) {
+                parameters.put("msg", m.text);
+                parameters.put("msg-time", String.valueOf(m.getTime()));
+            }
+            User.SubMessage sm = user.getSubMessage(msgId);
+            if (sm != null) {
+                parameters.put("msg", sm.attached_message);
+                parameters.put("msg-time", String.valueOf(sm.getTime()));
+            }
         }
         if (autoModMsgId != null) {
             parameters.put("automod-msg-id", autoModMsgId);
@@ -828,24 +1005,13 @@ public class Helper {
                 parameters.put("msg", autoModMsg);
             }
         }
-        parameters.put("user-id", user.getId());
-        if (user.getTwitchBadges() != null) {
-            parameters.put("twitch-badge-info", user.getTwitchBadges().toString());
-            parameters.put("twitch-badges", Usericon.makeBadgeInfo(user.getTwitchBadges()));
-        }
-        parameters.put("display-nick", user.getDisplayNick());
-        parameters.put("custom-nick", user.getCustomNick());
-        parameters.put("full-nick", user.getFullNick());
-        if (!user.hasRegularDisplayNick()) {
-            parameters.put("display-nick2", user.getDisplayNick()+" ("+user.getRegularDisplayNick()+")");
-            parameters.put("full-nick2", user.getFullNick()+" ("+user.getRegularDisplayNick()+")");
-            parameters.put("special-nick", "true");
-        }
-        else {
-            parameters.put("display-nick2", user.getDisplayNick());
-            parameters.put("full-nick2", user.getFullNick());
-        }
         parameters.putObject("user", user);
+    }
+    
+    public static Parameters createRoomParameters(Room room) {
+        Parameters parameters = Parameters.create("");
+        parameters.putObject("room", room);
+        return parameters;
     }
     
     private static final Map<UserNotice, javax.swing.Timer> pointsMerge = new HashMap<>();
@@ -853,6 +1019,11 @@ public class Helper {
     /**
      * Must be run in EDT.
      * 
+     * If a UserNotice with the same Reward ID (in tags) has already been added
+     * for merge it will perform the merge and output the message, otherwise it
+     * will store the given one for merging and start a backup timer to output
+     * it if no merge will occur in the given time.
+     *
      * @param newNotice
      * @param g 
      */
@@ -872,15 +1043,21 @@ public class Helper {
         }
     }
     
+    /**
+     * Finds the Points UserNotice that has already been received from PubSub or
+     * IRC and merges it accordingly. Stops the timer that would have output the
+     * found UserNotice.
+     * 
+     * @param newNotice
+     * @return The merged UserNotice, or null if none could be found
+     */
     private static UserNotice findPointsMerge(UserNotice newNotice) {
         UserNotice found = null;
         for (Map.Entry<UserNotice, javax.swing.Timer> entry : pointsMerge.entrySet()) {
             UserNotice stored = entry.getKey();
             // Attached messages seem to be trimmed depending on source
-            boolean sameAttachedMsg = Objects.equals(
-                    StringUtil.trimAll(stored.attachedMessage),
-                    StringUtil.trimAll(newNotice.attachedMessage));
-            if (stored.user.sameUser(newNotice.user) && sameAttachedMsg) {
+            if (stored.tags.getCustomRewardId() != null
+                    && stored.tags.getCustomRewardId().equals(newNotice.tags.getCustomRewardId())) {
                 found = stored;
                 entry.getValue().stop();
             }
@@ -900,7 +1077,17 @@ public class Helper {
             MainSettings.DEFAULT_TIMEZONE = TimeZone.getDefault();
             TimeZone tz = TimeZone.getTimeZone(input);
             TimeZone.setDefault(tz);
+            DateTime.setTimeZone(tz);
             LOGGER.info(String.format("[Timezone] Set to %s [%s]", tz.getDisplayName(), input));
+        }
+    }
+    
+    public static void setDefaultLocale(String input) {
+        if (!StringUtil.isNullOrEmpty(input)) {
+            Locale locale = Locale.forLanguageTag(input);
+            Locale.setDefault(locale);
+            LOGGER.info(String.format("[Locale] Set to %s [%s]",
+                    locale.getDisplayName(), locale.toLanguageTag()));
         }
     }
     
@@ -943,7 +1130,7 @@ public class Helper {
                 b.append(String.format("* Backup written to %s\n",
                         r.backupPath));
             }
-            else if (r.writeError != null) {
+            else if (r.backupError != null) {
                 b.append(String.format("* Backup failed: %s\n",
                         getErrorMessageCompact(r.backupError)));
             }
@@ -963,6 +1150,75 @@ public class Helper {
             }
         }
         return b.toString();
+    }
+    
+    public static Map<String, DockLayout> getLayoutsFromSettings(Settings settings) {
+        Map<String, DockLayout> layouts = new HashMap<>();
+        Map<String, List> values = settings.getMap("layouts");
+        for (Map.Entry<String, List> entry : values.entrySet()) {
+            DockLayout layout = DockLayout.fromList(entry.getValue());
+            if (layout != null) {
+                layouts.put(entry.getKey(), layout);
+            }
+        }
+        return layouts;
+    }
+    
+    /**
+     * Check if the correct SLF4J binding was loaded, when more bindings than
+     * the one in the JAR are found, which seems almost impossible, but just in
+     * case. I haven't been able to have this happen when using the regular JAR
+     * since the classpath would be just the JAR and adding a binding as an
+     * extension library causes the following error, but I don't know if that is
+     * always the case.
+     *
+     * Failed to instantiate SLF4J LoggerFactory
+     * java.lang.NoClassDefFoundError: org/slf4j/spi/LoggerFactoryBinder at
+     *  java.lang.ClassLoader.defineClass1(Native Method) at
+     *  java.lang.ClassLoader.defineClass(ClassLoader.java:763)
+     *  ...
+     * Caused by: java.lang.ClassNotFoundException: org.slf4j.spi.LoggerFactoryBinder at
+     *  java.net.URLClassLoader.findClass(URLClassLoader.java:382) at
+     *  java.lang.ClassLoader.loadClass(ClassLoader.java:424)
+     *  ...
+     */
+    public static void checkSLF4JBinding() {
+        try {
+            if (!org.slf4j.LoggerFactory.getILoggerFactory().getClass().getName().equals("org.slf4j.impl.JDK14LoggerFactory")) {
+                throw new RuntimeException("Wrong SLF4F binding: " + org.slf4j.LoggerFactory.getILoggerFactory().getClass().getName());
+            }
+        }
+        catch (Throwable ex) {
+            startError("An error occured getting logger binding. See debug logs for details.");
+            throw ex;
+        }
+    }
+    
+    /**
+     * Show a simple window with an error, intended only for use when other GUI
+     * has not been created yet.
+     * 
+     * @param msg 
+     */
+    public static void startError(String msg) {
+        JFrame frame = new JFrame();
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        JLabel label = new JLabel(msg);
+        label.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        frame.add(label, BorderLayout.CENTER);
+        frame.setTitle("Chatty Start Error");
+        JButton closeButton = new JButton("OK");
+        closeButton.addActionListener(e -> System.exit(0));
+        frame.add(closeButton, BorderLayout.SOUTH);
+        frame.pack();
+        frame.setLocationRelativeTo(null);
+        frame.setVisible(true);
+    }
+    
+    private static final Instant CHAT_COMMAND_SHUTOFF = ZonedDateTime.of(2023, 2, 10, 0, 0, 0, 0, ZoneId.of("-07:00")).toInstant();
+    
+    public static boolean isBeforeChatCommandsShutoff() {
+        return Instant.now().isBefore(CHAT_COMMAND_SHUTOFF);
     }
     
 }

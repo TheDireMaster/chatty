@@ -1,13 +1,18 @@
 
 package chatty;
 
+import chatty.Chatty.PathType;
+import chatty.gui.laf.LaFChanger;
 import chatty.util.RingBuffer;
+import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.text.MessageFormat;
 import java.util.Date;
+import java.util.LinkedList;
 import java.util.logging.*;
 
 /**
@@ -18,16 +23,13 @@ public class Logging {
     
     public static final Level USERINFO = new UserinfoLevel();
     
-    private static final String LOG_FILE = Chatty.getDebugLogDirectory()+"debug%g.log";
-    private static final String LOG_FILE_SESSION = Chatty.getDebugLogDirectory()+"debug_session.log";
-    private static final String LOG_FILE_IRC = Chatty.getDebugLogDirectory()+"debug_irc%g.log";
+    private static final String LOG_FILE = Chatty.getPath(PathType.DEBUG).toString()+File.separator+"debug%g.log";
+    private static final String LOG_FILE_IRC = Chatty.getPath(PathType.DEBUG).toString()+File.separator+"debug_irc%g.log";
     
     /**
      * Maximum log file size in bytes.
      */
     private static final int MAX_LOG_SIZE = 1024*1024*2;
-    
-    private static final int MAX_SESSION_LOG_SIZE = 1024*1024*20;
     
     /**
      * How many log files to rotate through when the file reaches maximum size.
@@ -65,12 +67,6 @@ public class Logging {
             file.setLevel(Level.INFO);
             file.setFilter(new FileFilter());
             Logger.getLogger("").addHandler(file);
-            
-            FileHandler fileSession = new FileHandler(LOG_FILE_SESSION, MAX_SESSION_LOG_SIZE, 1);
-            fileSession.setFormatter(new TextFormatter());
-            fileSession.setLevel(Level.INFO);
-            fileSession.setFilter(new FileFilter());
-            Logger.getLogger("").addHandler(fileSession);
         } catch (IOException | SecurityException ex) {
             fileWarning(ex);
         }
@@ -81,7 +77,7 @@ public class Logging {
             @Override
             public void publish(LogRecord record) {
                 if (record.getLevel() != USERINFO) {
-                    client.debug(record.getMessage());
+                    client.debug(simpleFormatMessage(record));
                     // WebsocketClient/WebsocketManager
                     if (record.getMessage().startsWith("[FFZ-WS]")) {
                         client.debugFFZ(record.getMessage());
@@ -89,10 +85,21 @@ public class Logging {
                     if (record.getMessage().startsWith("[PubSub]")) {
                         client.debugPubSub(record.getMessage());
                     }
+                    if (record.getMessage().startsWith("[EventSub]")
+                            || record.getMessage().contains("https://api.twitch.tv/helix/eventsub/subscriptions")) {
+                        client.debugEventSub(record.getMessage());
+                    }
                 }
                 if (record.getLevel() == Level.SEVERE) {
                     if (client.g != null) {
-                        client.g.error(record, lastMessages.getItems());
+                        String msg = record.getMessage();
+                        boolean flatLafError = msg.startsWith("FlatLaf: Failed to parse:");
+                        if (flatLafError) {
+                            LaFChanger.loggedFlatLookAndFeelError(msg+" "+record.getThrown().getLocalizedMessage());
+                        }
+                        else {
+                            client.g.error(record, lastMessages.getItems());
+                        }
                     }
                 } else if (record.getLevel() == USERINFO) {
                     client.warning(record.getMessage());
@@ -120,28 +127,38 @@ public class Logging {
 
         @Override
         public String format(LogRecord record) {
-            return formatRecord(record);
-        }
-        
-    }
-    
-    public static String formatRecord(LogRecord record) {
-        return String.format("[%1$tF %1$tT/%1$tL %5$s] %2$s%6$s [%3$s/%4$s]\n",
+            return String.format("[%1$tF %1$tT/%1$tL %5$s] %2$s%6$s [%3$s/%4$s]\n",
                 new Date(record.getMillis()),
-                record.getMessage(),
+                simpleFormatMessage(record),
                 record.getSourceClassName(),
                 record.getSourceMethodName(),
                 record.getLevel().getName(),
                 getStacktraceForLogging(record.getThrown()));
+        }
+        
     }
     
     public static String formatRecordCompact(LogRecord record) {
         return String.format("[%1$tT/%1$tL] %2$s%5$s [%3$s/%4$s]\n",
                 new Date(record.getMillis()),
-                record.getMessage(),
+                simpleFormatMessage(record),
                 record.getSourceClassName(),
                 record.getSourceMethodName(),
                 getStacktraceForLogging(record.getThrown()));
+    }
+    
+    private static String simpleFormatMessage(LogRecord record) {
+        // Probably just third-party code has records with parameters currently
+        Object[] params = record.getParameters();
+        if (params == null || params.length == 0) {
+            return record.getMessage();
+        }
+        try {
+            return MessageFormat.format(record.getMessage(), params);
+        }
+        catch (Exception ex) {
+            return record.getMessage();
+        }
     }
     
     public static String getStacktrace(Throwable t) {
@@ -206,7 +223,7 @@ public class Logging {
     
     public static void createLogDir() {
         try {
-            Files.createDirectories(Paths.get(Chatty.getDebugLogDirectory()));
+            Files.createDirectories(Chatty.getPath(PathType.DEBUG));
         } catch (IOException ex) {
             fileWarning(ex);
         }
@@ -215,7 +232,7 @@ public class Logging {
     private static void fileWarning(Throwable ex) {
         if (client != null) {
             client.warning(String.format("Failed creating log files. Check that %s can be written to. (%s)",
-                    Chatty.getDebugLogDirectory(),
+                    Chatty.getPath(PathType.DEBUG),
                     ex));
         }
     }

@@ -19,8 +19,9 @@ public interface TwitchApiResultListener {
     void tokenVerified(String token, TokenInfo tokenInfo);
     void tokenRevoked(String error);
     void runCommercialResult(String stream, String text, RequestResultCode result);
-    void putChannelInfoResult(RequestResultCode result);
+    void putChannelInfoResult(RequestResultCode result, String error);
     void receivedChannelInfo(String channel, ChannelInfo info, RequestResultCode result);
+    void receivedChannelStatus(ChannelStatus status, RequestResultCode resultCode);
     void accessDenied();
     void receivedFollowers(FollowerInfo followerInfo);
     void newFollowers(FollowerInfo followerInfo);
@@ -43,5 +44,12 @@ public interface TwitchApiResultListener {
      */
     void followResult(String message);
     
-    void autoModResult(String result, String msgId);
+    void autoModResult(TwitchApi.AutoModAction action, String msgId, TwitchApi.AutoModActionResult result);
+    
+    /**
+     * Generic human-readable message intended for output.
+     * 
+     * @param error 
+     */
+    void errorMessage(String error);
 }

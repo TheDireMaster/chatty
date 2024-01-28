@@ -1,6 +1,7 @@
 
 package chatty;
 
+import chatty.util.StringUtil;
 import chatty.util.settings.Settings;
 import java.util.HashSet;
 import java.util.Set;
@@ -27,12 +28,14 @@ public class WhisperManager {
     private final WhisperListener listener;
     private final Settings settings;
     private final TwitchConnection c;
+    private final TwitchClient client;
     
     public WhisperManager(WhisperListener listener, Settings settings,
-            TwitchConnection c) {
+            TwitchConnection c, TwitchClient client) {
         this.listener = listener;
         this.settings = settings;
         this.c = c;
+        this.client = client;
     }
     
     public boolean isAvailable() {
@@ -110,14 +113,31 @@ public class WhisperManager {
             return;
         }
         if (isAvailable()) {
-            if (!rawWhisper(nick, message)) {
-                listener.info("# Whisper not sent (spam protection): " + message);
-            } else {
-                User user = c.getUser(WHISPER_CHANNEL, nick);
-                listener.whisperSent(user, message);
-                if (isUserIgnored(user)) {
-                    listener.info("You haven't allowed to receive whispers from " + user);
+            if (Helper.isBeforeChatCommandsShutoff() && !settings.getBoolean("whisperApi")) {
+                if (!rawWhisper(nick, message)) {
+                    listener.info("# Whisper not sent (spam protection): " + message);
                 }
+                else {
+                    User user = c.getUser(WHISPER_CHANNEL, nick);
+                    listener.whisperSent(user, message);
+                    if (isUserIgnored(user)) {
+                        listener.info("You haven't allowed to receive whispers from " + user);
+                    }
+                }
+            }
+            else {
+                client.api.whisper(nick, message, r -> {
+                    if (r.error != null) {
+                        listener.info("# Whisper not sent: " + r.error);
+                    }
+                    else {
+                        User user = c.getUser(WHISPER_CHANNEL, nick);
+                        listener.whisperSent(user, message);
+                        if (isUserIgnored(user)) {
+                            listener.info("You haven't allowed to receive whispers from " + user);
+                        }
+                    }
+                });
             }
         } else {
             listener.info("Can't send whisper: not connected");
@@ -157,7 +177,12 @@ public class WhisperManager {
         }
         if (isUserIgnored(user) && settings.getBoolean("whisperAutoRespond")) {
             if (!autoRespondedTo.contains(user.getName())) {
-                rawWhisper(user.getName(), AUTO_RESPOND_MESSAGE);
+                String msg = AUTO_RESPOND_MESSAGE;
+                String customMsg = settings.getString("whisperAutoRespondCustom");
+                if (!StringUtil.isNullOrEmpty(customMsg)) {
+                    msg = String.format("%s (%s)", msg, customMsg);
+                }
+                rawWhisper(user.getName(), msg);
                 autoRespondedTo.add(user.getName());
             }
         } else {

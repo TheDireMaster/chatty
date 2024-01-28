@@ -2,16 +2,20 @@
 package chatty.gui.components;
 
 import chatty.Chatty;
+import chatty.Chatty.PathType;
 import chatty.Helper;
 import chatty.User;
+import chatty.gui.DockedDialogHelper;
+import chatty.gui.DockedDialogManager;
 import chatty.gui.GuiUtil;
-import chatty.gui.LaF;
+import chatty.gui.laf.LaF;
 import chatty.gui.MainGui;
 import chatty.gui.components.menus.ContextMenu;
 import chatty.gui.components.menus.ContextMenuListener;
 import chatty.gui.components.menus.StreamsContextMenu;
 import chatty.gui.components.menus.UserContextMenu;
 import chatty.gui.components.settings.ListTableModel;
+import chatty.lang.Language;
 import chatty.util.DateTime;
 import chatty.util.Debugging;
 import chatty.util.StringUtil;
@@ -19,6 +23,7 @@ import chatty.util.api.Follower;
 import chatty.util.api.FollowerInfo;
 import chatty.util.api.TwitchApi;
 import chatty.util.colors.ColorCorrectionNew;
+import chatty.util.dnd.DockContent;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -26,6 +31,7 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.Window;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.MouseAdapter;
@@ -35,7 +41,6 @@ import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
@@ -47,8 +52,10 @@ import javax.swing.BorderFactory;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
+import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
+import javax.swing.JTextArea;
 import javax.swing.Timer;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableCellRenderer;
@@ -90,12 +97,14 @@ public class FollowersDialog extends JDialog {
     private final ListTableModel<Follower> followers = new MyListTableModel();
     private final JLabel loadInfo = new JLabel();
     
+    private final JScrollPane accessInfo;
+    private final JScrollPane mainTable;
+    
     private final TwitchApi api;
     private final MainGui main;
     private final Type type;
     private final ContextMenuListener contextMenuListener;
-    
-    private final MyContextMenu mainContextMenu = new MyContextMenu();
+    private final DockedDialogHelper helper;
     
     private final MyRenderer timeRenderer = new MyRenderer(MyRenderer.Type.TIME);
     private final MyRenderer timeRenderer2 = new MyRenderer(MyRenderer.Type.USER_TIME);
@@ -130,27 +139,28 @@ public class FollowersDialog extends JDialog {
     private boolean showRegistered;
 
     public FollowersDialog(Type type, MainGui owner, final TwitchApi api,
-            ContextMenuListener contextMenuListener) {
+            ContextMenuListener contextMenuListener, DockedDialogManager dockedDialogs) {
         super(owner);
         
         this.contextMenuListener = contextMenuListener;
         this.type = type;
         this.main = owner;
         this.api = api;
-        
-        // Layout
-        setLayout(new GridBagLayout());
+
+        JPanel mainPanel = new JPanel(new GridBagLayout());
         
         GridBagConstraints gbc;
         gbc = GuiUtil.makeGbc(0, 0, 1, 1, GridBagConstraints.WEST);
         total.setToolTipText("Total number of "+type);
-        add(total, gbc);
+        mainPanel.add(total, gbc);
         
         gbc = GuiUtil.makeGbc(0, 1, 1, 1, GridBagConstraints.WEST);
         gbc.insets = new Insets(0, 6, 3, 5);
         gbc.weightx = 1;
         stats.setToolTipText(type+" in the last 7 days (Week), 24 hours (Day) and Hour (based on the current list)");
-        add(stats, gbc);
+        if (type == Type.FOLLOWERS) {
+            mainPanel.add(stats, gbc);
+        }
         
         gbc = GuiUtil.makeGbc(0, 2, 2, 1);
         gbc.fill = GridBagConstraints.BOTH;
@@ -169,11 +179,22 @@ public class FollowersDialog extends JDialog {
         table.setIntercellSpacing(new Dimension(0, 0));
         table.setFont(table.getFont().deriveFont(Font.BOLD));
         table.setRowHeight(table.getFontMetrics(table.getFont()).getHeight()+2);
-        add(new JScrollPane(table), gbc);
+        mainTable = new JScrollPane(table);
+        mainPanel.add(mainTable, gbc);
+        
+        JTextArea accessInfoText = new JTextArea(
+                type == Type.FOLLOWERS
+                        ? Language.getString("followersDialog.accessInfo")
+                        : Language.getString("subscribersDialog.accessInfo"));
+        accessInfoText.setLineWrap(true);
+        accessInfoText.setWrapStyleWord(true);
+        accessInfoText.setEditable(false);
+        accessInfo = new JScrollPane(accessInfoText);
+        mainPanel.add(accessInfo, gbc);
         
         gbc = GuiUtil.makeGbc(0, 3, 2, 1, GridBagConstraints.WEST);
         gbc.insets = new Insets(2, 5, 5, 5);
-        add(loadInfo, gbc);
+        mainPanel.add(loadInfo, gbc);
         
         // Timer
         Timer timer = new Timer(REFRESH_TIMER, new ActionListener() {
@@ -218,7 +239,7 @@ public class FollowersDialog extends JDialog {
             }
         });
         // Add to content pane, seems to work better than adding to "this"
-        getContentPane().addMouseListener(new MouseAdapter() {
+        mainPanel.addMouseListener(new MouseAdapter() {
             
             @Override
             public void mousePressed(MouseEvent e) {
@@ -231,10 +252,77 @@ public class FollowersDialog extends JDialog {
             }
         });
         
+        add(mainPanel);
+        
+        DockContent content = dockedDialogs.createContent(mainPanel, type.name,
+                type == Type.FOLLOWERS ? "-followers-" : "-subscribers-");
+        helper = dockedDialogs.createHelper(new DockedDialogHelper.DockedDialog() {
+            @Override
+            public void setVisible(boolean visible) {
+                FollowersDialog.super.setVisible(visible);
+            }
+
+            @Override
+            public boolean isVisible() {
+                return FollowersDialog.super.isVisible();
+            }
+
+            @Override
+            public void addComponent(Component comp) {
+                add(comp);
+            }
+
+            @Override
+            public void removeComponent(Component comp) {
+                remove(comp);
+            }
+
+            @Override
+            public Window getWindow() {
+                return FollowersDialog.this;
+            }
+
+            @Override
+            public DockContent getContent() {
+                return content;
+            }
+        });
+        helper.setChannelChangeListener((channel) -> {
+            if (isVisible()) {
+                showDialog(Helper.toStream(channel));
+            }
+        });
+        
         pack();
         setSize(300,400);
         
         GuiUtil.installEscapeCloseOperation(this);
+        
+        updateMain();
+    }
+    
+    private void updateMain() {
+        boolean showTable = currentInfo == null || currentInfo.total == 0 || currentInfo.hasFollowers();
+        mainTable.setVisible(showTable);
+        accessInfo.setVisible(!showTable);
+    }
+    
+    @Override
+    public void setVisible(boolean visible) {
+        helper.setVisible(visible, true);
+    }
+    
+    @Override
+    public boolean isVisible() {
+        return helper.isVisible();
+    }
+    
+    @Override
+    public void setTitle(String title) {
+        super.setTitle(title);
+        if (helper != null) {
+            helper.getContent().setLongTitle(title);
+        }
     }
     
     public void setCompactMode(boolean compactMode) {
@@ -320,7 +408,10 @@ public class FollowersDialog extends JDialog {
     
     private void openMainContextMenu(MouseEvent e) {
         if (e.isPopupTrigger()) {
-            mainContextMenu.show(e.getComponent(), e.getX(), e.getY());
+            ContextMenu menu = new MyContextMenu();
+            menu.addSeparator();
+            helper.addToContextMenu(menu);
+            menu.show(e.getComponent(), e.getX(), e.getY());
         }
     }
     
@@ -405,6 +496,7 @@ public class FollowersDialog extends JDialog {
             loadInfo.setText("Loading..");
         }
         updateStats();
+        updateMain();
     }
     
     /**
@@ -414,6 +506,7 @@ public class FollowersDialog extends JDialog {
      */
     public void showDialog(String stream) {
         this.stream = stream;
+        helper.setCurrentChannel(stream);
         setTitle(type+" of "+stream+" (100 most recent)");
         if (currentInfo == null || !currentInfo.stream.equals(stream)) {
             // Set to default if no info is set yet or if it is opened on a
@@ -425,6 +518,7 @@ public class FollowersDialog extends JDialog {
             lastValidInfo = null;
             lastUpdated = -1;
             updateStats();
+            updateMain();
         }
         setVisible(true);
         request();
@@ -476,6 +570,11 @@ public class FollowersDialog extends JDialog {
      * @param oldInfo 
      */
     private void updateTotalLabel(FollowerInfo newInfo, FollowerInfo oldInfo) {
+        String points = "";
+        if (type == Type.SUBSCRIBERS) {
+            points = String.format(" (%s Points)",
+                    Helper.formatViewerCount(newInfo.totalPoints));
+        }
         if (oldInfo != null && newInfo != oldInfo && oldInfo.stream.equals(stream)
                 && !oldInfo.requestError) {
             int change = newInfo.total - oldInfo.total;
@@ -485,9 +584,9 @@ public class FollowersDialog extends JDialog {
             } else if (change > 0) {
                 changeString = " (+" + change + ")";
             }
-            total.setText("Total: " + Helper.formatViewerCount(newInfo.total) + changeString);
+            total.setText("Total: " + Helper.formatViewerCount(newInfo.total) + changeString + points);
         } else {
-            total.setText("Total: " + Helper.formatViewerCount(newInfo.total));
+            total.setText("Total: " + Helper.formatViewerCount(newInfo.total) + points);
         }
     }
     
@@ -511,7 +610,7 @@ public class FollowersDialog extends JDialog {
     private void saveToFile(boolean onlyName) {
         FollowerInfo info = lastValidInfo;
         if (info != null) {
-            Path path = Paths.get(Chatty.getUserDataDirectory(),"exported");
+            Path path = Chatty.getPath(PathType.EXPORT);
             Path file = path.resolve(StringUtil.toLowerCase(type.toString())+".txt");
             try {
                 Files.createDirectories(path);
@@ -520,8 +619,13 @@ public class FollowersDialog extends JDialog {
                     for (Follower f : lastValidInfo.followers) {
                         writer.write(f.name);
                         if (!onlyName) {
-                            writer.write("\t" + DateTime.formatFullDatetime(f.follow_time));
-                            writer.write(" (" + DateTime.agoSingleVerbose(f.follow_time) + ")");
+                            if (f.follow_time != -1) {
+                                writer.write("\t" + DateTime.formatFullDatetime(f.follow_time));
+                                writer.write(" (" + DateTime.agoSingleVerbose(f.follow_time) + ")");
+                            }
+                            if (f.verboseInfo != null) {
+                                writer.write("\t" + f.verboseInfo);
+                            }
                         }
                         writer.newLine();
                     }
@@ -601,13 +705,20 @@ public class FollowersDialog extends JDialog {
                 }
             }
             else if (type == Type.TIME) {
-                if (compactMode) {
-                    setText(DateTime.agoSingleCompact(f.follow_time));
+                if (f.info != null) {
+                    // No time available if info is set as alternative
+                    setText(f.info);
+                    setToolTipText(f.verboseInfo);
                 }
                 else {
-                    setText(DateTime.agoSingleVerbose(f.follow_time));
+                    if (compactMode) {
+                        setText(DateTime.agoSingleCompact(f.follow_time));
+                    }
+                    else {
+                        setText(DateTime.agoSingleVerbose(f.follow_time));
+                    }
+                    setToolTipText(DateTime.formatFullDatetime(f.follow_time));
                 }
-                setToolTipText(DateTime.formatFullDatetime(f.follow_time));
             }
             else if (type == Type.USER_TIME) {
                 if (f.user_created_time != -1) {
@@ -788,7 +899,7 @@ public class FollowersDialog extends JDialog {
         public MyContextMenu() {
             final String saveMenu = "Export list to file";
             addItem("saveSimple", "Names only", saveMenu);
-            addItem("saveVerbose", "Names and dates", saveMenu);
+            addItem("saveVerbose", "Names and extra info", saveMenu);
         }
         
         @Override
@@ -798,6 +909,7 @@ public class FollowersDialog extends JDialog {
             } else if (e.getActionCommand().equals("saveVerbose")) {
                 saveToFile(false);
             }
+            helper.menuAction(e);
         }
         
     }
@@ -829,12 +941,12 @@ public class FollowersDialog extends JDialog {
         test.add(createTestFollower(stream, 60*60*24*180, 24*900, false));
         test.add(createTestFollower(stream, 60*60*24*180, 24*900, false));
         test.add(createTestFollower(stream, 60*60*24*180, 24*900, false));
-        return new FollowerInfo(Follower.Type.FOLLOWER, stream, test, 1338);
+        return new FollowerInfo(Follower.Type.FOLLOWER, stream, test, 1338, -1);
     }
     
     private static Follower createTestFollower(String name, long timeOffset, long userOffset, boolean newFollower) {
         boolean refollow = ThreadLocalRandom.current().nextInt(20) == 0;
-        return new Follower(Follower.Type.FOLLOWER, name, name, System.currentTimeMillis() - timeOffset*1000, System.currentTimeMillis() - userOffset*60*60*1000, refollow, newFollower);
+        return new Follower(Follower.Type.FOLLOWER, name, name, System.currentTimeMillis() - timeOffset*1000, System.currentTimeMillis() - userOffset*60*60*1000, refollow, newFollower, null, null);
     }
     
 }

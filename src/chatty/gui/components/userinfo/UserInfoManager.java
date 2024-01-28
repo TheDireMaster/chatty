@@ -6,9 +6,12 @@ import chatty.User;
 import chatty.gui.GuiUtil;
 import chatty.gui.MainGui;
 import chatty.gui.components.menus.ContextMenuListener;
+import chatty.util.Timestamp;
 import chatty.util.api.ChannelInfo;
 import chatty.util.api.Follower;
+import chatty.util.api.FollowerInfo;
 import chatty.util.api.TwitchApi;
+import chatty.util.api.UserInfo;
 import chatty.util.commands.CustomCommand;
 import chatty.util.commands.Parameters;
 import chatty.util.settings.Settings;
@@ -21,6 +24,7 @@ import java.awt.event.ComponentListener;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  *
@@ -28,7 +32,7 @@ import java.util.List;
  */
 public class UserInfoManager {
     
-    private final List<UserInfo> dialogs = new ArrayList<>();
+    private final List<UserInfoDialog> dialogs = new ArrayList<>();
     private final ComponentListener closeListener;
     
     private final Window dummyWindow = new Window(null);
@@ -44,10 +48,10 @@ public class UserInfoManager {
     
     private String buttonsDef;
     private float fontSize;
-    private SimpleDateFormat timestampFormat;
+    private Timestamp timestampFormat;
     
     public UserInfoManager(final MainGui owner, Settings settings,
-            final ContextMenuListener contextMenuListener) {
+            final ContextMenuListener contextMenuListener, TwitchApi api) {
         this.main = owner;
         this.settings = settings;
         this.contextMenuListener = contextMenuListener;
@@ -79,13 +83,19 @@ public class UserInfoManager {
 
             @Override
             public Follower getSingleFollower(String stream, String streamId, String user, String userId, boolean refresh) {
-                return main.getSingleFollower(stream, streamId, user, userId, refresh);
+                return api.getSingleFollower(stream, streamId, user, userId, refresh);
             }
 
             @Override
-            public ChannelInfo getCachedChannelInfo(String channel, String id) {
-                return main.getCachedChannelInfo(channel, id);
+            public UserInfo getCachedUserInfo(String channel, Consumer<UserInfo> result) {
+                return api.getCachedUserInfo(channel, result);
             }
+            
+            @Override
+            public void requestFollowerInfo(String stream) {
+                api.getFollowers(stream);
+            }
+
         };
     }
     
@@ -95,38 +105,38 @@ public class UserInfoManager {
     
     public void setUserDefinedButtonsDef(String def) {
         this.buttonsDef = def;
-        for (UserInfo dialog : dialogs) {
-            dialog.setUserDefinedButtonsDef(def);
+        for (UserInfoDialog dialog : dialogs) {
+            dialog.setUserDefinedButtonsDef(def, false);
         }
     }
     
     public void update(User user, String localUsername) {
-        for (UserInfo dialog : dialogs) {
+        for (UserInfoDialog dialog : dialogs) {
             dialog.update(user, localUsername);
         }
     }
 
-    public void setChannelInfo(String stream, ChannelInfo info) {
-        for (UserInfo dialog : dialogs) {
-            dialog.setChannelInfo(stream, info);
+    public void setFollowInfo(String stream, String user, TwitchApi.RequestResultCode result, Follower follow) {
+        for (UserInfoDialog dialog : dialogs) {
+            dialog.setFollowInfo(stream, user, follow, result);
         }
     }
-
-    public void setFollowInfo(String stream, String user, TwitchApi.RequestResultCode result, Follower follow) {
-        for (UserInfo dialog : dialogs) {
-            dialog.setFollowInfo(stream, user, follow, result);
+    
+    public void setFollowerInfo(FollowerInfo info) {
+        for (UserInfoDialog dialog : dialogs) {
+            dialog.setFollowerInfo(info);
         }
     }
     
     public void setFontSize(float fontSize) {
         this.fontSize = fontSize;
-        for (UserInfo dialog : dialogs) {
+        for (UserInfoDialog dialog : dialogs) {
             dialog.setFontSize(fontSize);
         }
     }
     
     public void show(Component owner, User user, String msgId, String autoModMsgId, String localUsername, boolean keepPosition) {
-        UserInfo dialogToShow = getBestByUser(user);
+        UserInfoDialog dialogToShow = getBestByUser(user);
         if (dialogToShow == null) {
             dialogToShow = getFirstUnpinned();
         }
@@ -143,8 +153,8 @@ public class UserInfoManager {
         dialogToShow.show(owner, user, msgId, autoModMsgId, localUsername);
     }
     
-    private UserInfo getFirstUnpinned() {
-        for (UserInfo dialog : dialogs) {
+    private UserInfoDialog getFirstUnpinned() {
+        for (UserInfoDialog dialog : dialogs) {
             if (!dialog.isPinned()) {
                 return dialog;
             }
@@ -154,7 +164,7 @@ public class UserInfoManager {
     
     private int numUnpinned() {
         int num = 0;
-        for (UserInfo dialog : dialogs) {
+        for (UserInfoDialog dialog : dialogs) {
             if (!dialog.isPinned()) {
                 num++;
             }
@@ -162,17 +172,17 @@ public class UserInfoManager {
         return num;
     }
     
-    private UserInfo getBestByUser(User user) {
+    private UserInfoDialog getBestByUser(User user) {
         // First try to find existing one for user, if enabled
         if (settings.getBoolean("reuseUserDialog")) {
-            for (UserInfo dialog : dialogs) {
+            for (UserInfoDialog dialog : dialogs) {
                 if (dialog.getUser() == user && dialog.isVisible()) {
                     return dialog;
                 }
             }
         }
         // Then try to find visible and unpinned one
-        for (UserInfo dialog : dialogs) {
+        for (UserInfoDialog dialog : dialogs) {
             if (!dialog.isPinned() && dialog.isVisible()) {
                 return dialog;
             }
@@ -180,15 +190,15 @@ public class UserInfoManager {
         return null;
     }
     
-    private UserInfo createNew() {
-        UserInfo dialog = new UserInfo(main, userInfoListener, userInfoRequester, settings, contextMenuListener);
-        dialog.setUserDefinedButtonsDef(buttonsDef);
+    private UserInfoDialog createNew() {
+        UserInfoDialog dialog = new UserInfoDialog(main, userInfoListener, userInfoRequester, settings, contextMenuListener);
+        dialog.setUserDefinedButtonsDef(buttonsDef, false);
         dialog.setFontSize(fontSize);
         dialog.setTimestampFormat(timestampFormat);
         return dialog;
     }
     
-    private void setInitialLocationAndSize(UserInfo dialog) {
+    private void setInitialLocationAndSize(UserInfoDialog dialog) {
         Point targetLocation = dummyWindow.getLocation();
         if (dummyWindow.getWidth() == 0) {
             // Since size (and location) has not been set from the settings,
@@ -209,7 +219,7 @@ public class UserInfoManager {
     }
     
     private void handleClosed(Component c) {
-        UserInfo dialog = (UserInfo)c;
+        UserInfoDialog dialog = (UserInfoDialog)c;
         if (canRemove(dialog)) {
             dialogs.remove(dialog);
             main.setWindowAttached(dialog, false);
@@ -222,14 +232,14 @@ public class UserInfoManager {
     }
     
     private void saveLocationAndSize(Component c) {
-        UserInfo dialog = (UserInfo)c;
+        UserInfoDialog dialog = (UserInfoDialog)c;
         if (!dialog.isPinned()) {
             dummyWindow.setSize(dialog.getSize());
             dummyWindow.setLocation(dialog.getLocation());
         }
     }
     
-    private boolean canRemove(UserInfo dialog) {
+    private boolean canRemove(UserInfoDialog dialog) {
         int numUnpinned = numUnpinned();
         if (!dialog.isPinned() && numUnpinned == 1) {
             return false;
@@ -238,7 +248,7 @@ public class UserInfoManager {
     }
     
     private boolean isLocationUsed(Point location) {
-        for (UserInfo dialog : dialogs) {
+        for (UserInfoDialog dialog : dialogs) {
             if (dialog.getLocation().equals(location)) {
                 return true;
             }
@@ -247,16 +257,16 @@ public class UserInfoManager {
     }
     
     public void aboutToSaveSettings() {
-        UserInfo dialog = getFirstUnpinned();
+        UserInfoDialog dialog = getFirstUnpinned();
         if (dialog != null) {
             dummyWindow.setLocation(dialog.getLocation());
             dummyWindow.setSize(dialog.getSize());
         }
     }
 
-    public void setTimestampFormat(SimpleDateFormat timestampFormat) {
+    public void setTimestampFormat(Timestamp timestampFormat) {
         this.timestampFormat = timestampFormat;
-        for (UserInfo dialog : dialogs) {
+        for (UserInfoDialog dialog : dialogs) {
             dialog.setTimestampFormat(timestampFormat);
         }
     }

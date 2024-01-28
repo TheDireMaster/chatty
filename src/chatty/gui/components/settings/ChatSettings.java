@@ -10,6 +10,7 @@ import java.awt.Insets;
 import java.awt.event.ItemEvent;
 import java.awt.event.ItemListener;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -47,7 +48,7 @@ public class ChatSettings extends SettingsPanel {
         
         BufferSizes bufferSizes = new BufferSizes(d);
         JButton bufferSizesButton = new JButton("Per tab buffer sizes");
-        bufferSizesButton.setMargin(GuiUtil.SMALL_BUTTON_INSETS);
+        GuiUtil.smallButtonInsets(bufferSizesButton);
         bufferSizesButton.addActionListener(e -> {
             bufferSizes.setLocationRelativeTo(ChatSettings.this);
             bufferSizes.setVisible(true);
@@ -113,23 +114,33 @@ public class ChatSettings extends SettingsPanel {
         
         JPanel commandPanel = new JPanel(new GridBagLayout());
         
-        commandPanel.add(new JLabel("Run command when clicking on user (holding Ctrl):"),
-                d.makeGbc(0, 0, 1, 1, GridBagConstraints.WEST));
+        Map<String, String> commandsDef = new LinkedHashMap<>();
+        commandsDef.put("commandOnCtrlClick", "Run command when clicking on user (holding Ctrl):");
+        commandsDef.put("commandOnMiddleClick", "Run command when middle-clicking on user:");
+        commandsDef.put("commandOnCtrlMiddleClick", "Run command when middle-clicking on user (holding Ctrl):");
+        int commandY = 0;
         
-        Map<String, String> commandChoices = new HashMap<>();
-        commandChoices.put("", "Off");
-        commandChoices.put("/timeout", "Timeout");
-        commandChoices.put("/ban", "Ban");
-        commandChoices.put("/delete $$(msg-id)", "Delete message");
-        ComboStringSetting commandOnCtrlClick = d.addComboStringSetting("commandOnCtrlClick", 100, true, commandChoices);
-        gbc = d.makeGbc(0, 1, 1, 1);
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        commandPanel.add(commandOnCtrlClick, gbc);
+        for (Map.Entry<String, String> entry : commandsDef.entrySet()) {
+            commandPanel.add(new JLabel(entry.getValue()),
+                    d.makeGbc(0, commandY, 1, 1, GridBagConstraints.WEST));
+
+            Map<String, String> commandChoices = new HashMap<>();
+            commandChoices.put("", "Off");
+            commandChoices.put("/timeout", "Timeout");
+            commandChoices.put("/ban", "Ban");
+            commandChoices.put("/delete $$(msg-id)", "Delete message");
+            ComboStringSetting commandOnCtrlClick = d.addComboStringSetting(entry.getKey(), 100, true, commandChoices);
+            gbc = d.makeGbc(0, commandY+1, 1, 1);
+            gbc.fill = GridBagConstraints.HORIZONTAL;
+            commandPanel.add(commandOnCtrlClick, gbc);
+            
+            commandY += 2;
+        }
         
-        gbc = d.makeGbc(0, 2, 1, 1);
+        gbc = d.makeGbc(0, commandY, 1, 1);
         commandPanel.add(new LinkLabel(SettingConstants.HTML_PREFIX
                 + "When manually editing the command: If there is only a single "
-                + "word, it will execute the command of that name (username "
+                + "word, it will execute the built-in command of that name (username "
                 + "as parameter), otherwise you can use "
                 + "[help-commands:replacements Custom Command Replacements] "
                 + "such as <code>$1</code> (username) or <code>$(msg-id)</code>.",
@@ -142,13 +153,7 @@ public class ChatSettings extends SettingsPanel {
     
     private static class BufferSizes extends JDialog {
         
-        private static final String INFO = "<html><body style='width:240px;padding:5px;'>"
-                + "Specify the buffer size per tab, specifying the lowercase name of the "
-                + "tab (for a channel that includes the leading #)."
-                + "<br /><br />This can "
-                + "be useful if you want to have a low default buffer size, to "
-                + "reduce memory usage, but want a huge scrollback on a few "
-                + "select channels.";
+        private static final String INFO = SettingsUtil.getInfo("info-buffer_sizes.html", null);
         
         private BufferSizes(SettingsDialog d) {
             super(d);
@@ -165,7 +170,7 @@ public class ChatSettings extends SettingsPanel {
             gbc.fill = GridBagConstraints.BOTH;
             gbc.weightx = 1;
             gbc.weighty = 1;
-            SimpleTableEditor<Long> editor = d.addLongMapSetting("bufferSizes", 300, 200);
+            SimpleTableEditor<Long> editor = d.addLongMapSetting("bufferSizes", 300, 200, "Tab Name", "Buffer Size");
             add(editor, gbc);
             
             gbc = d.makeGbc(0, 2, 1, 1);

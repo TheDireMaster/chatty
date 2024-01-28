@@ -2,8 +2,8 @@
 package chatty.gui.components.settings;
 
 import chatty.Chatty;
+import chatty.Chatty.PathType;
 import chatty.gui.GuiUtil;
-import static chatty.gui.GuiUtil.SMALL_BUTTON_INSETS;
 import chatty.gui.components.LinkLabel;
 import chatty.gui.notifications.Notification;
 import chatty.lang.Language;
@@ -24,6 +24,7 @@ import java.awt.event.ItemListener;
 import java.io.File;
 import java.io.FilenameFilter;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -42,9 +43,6 @@ public class NotificationSettings extends SettingsPanel {
     public final static long NOTIFICATION_TYPE_TRAY = 1;
     public final static long NOTIFICATION_TYPE_COMMAND = 2;
 
-    private final LinkLabel userReadPermission;
-    private final JCheckBox requestFollowedStreams;
-    
     private final ComboLongSetting nType;
     private final ComboLongSetting nScreen;
     private final ComboLongSetting nPosition;
@@ -54,6 +52,7 @@ public class NotificationSettings extends SettingsPanel {
     private final EditorStringSetting nCommand;
     
     private final PathSetting soundsPath;
+    private final ComboStringSetting soundFiles;
     
     private final JLabel filesResult = new JLabel();
     
@@ -143,6 +142,9 @@ public class NotificationSettings extends SettingsPanel {
         d.addLongSetting("nMaxDisplayTime", nMaxDisplayTime);
         notificationSettings.add(nMaxDisplayTime,
                 d.makeGbc(3, 2, 1, 1, GridBagConstraints.WEST));
+        
+        notificationSettings.add(d.addSimpleBooleanSetting("nKeepOpenOnHover"),
+                SettingsDialog.makeGbc(2, 3, 2, 1, GridBagConstraints.WEST));
 
         notificationSettings.add(new JLabel("Command:"), d.makeGbc(0, 4, 1, 1, GridBagConstraints.EAST));
 
@@ -196,7 +198,7 @@ public class NotificationSettings extends SettingsPanel {
         gbc = d.makeGbc(0, 2, 3, 1);
         gbc.insets = new Insets(3,10,3,8);
         
-        PathSetting path = new PathSetting(d, Chatty.getSoundDirectory());
+        PathSetting path = new PathSetting(d, Chatty.getDefaultPath(Chatty.PathType.SOUND).toString());
         d.addStringSetting("soundsPath", path);
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1;
@@ -208,7 +210,7 @@ public class NotificationSettings extends SettingsPanel {
         
         gbc = d.makeGbc(1, 3, 1, 1, GridBagConstraints.EAST);
         JButton rescanButton = new JButton("Rescan folder");
-        rescanButton.setMargin(SMALL_BUTTON_INSETS);
+        GuiUtil.smallButtonInsets(rescanButton);
         rescanButton.addActionListener(e -> {
             scanFiles(true);
         });
@@ -224,29 +226,83 @@ public class NotificationSettings extends SettingsPanel {
         //---------------
         JPanel devicePanel = new JPanel();
         devicePanel.add(new JLabel("Output Device: "));
-        
-        Map<String, String> devicePresets = new HashMap<>();
-        devicePresets.put("", "<default>");
-        for (String dev : Sound.getDeviceNames()) {
-            devicePresets.put(dev, dev);
-        }
-        final ComboStringSetting device = new ComboStringSetting(devicePresets);
-        device.addActionListener(new ActionListener() {
-
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                Sound.setDeviceName(device.getSettingValue());
-            }
-        });
+        DialogComboSetting device = new DialogComboSetting(d,
+                () -> {
+                    Map<String, String> devicePresets = new HashMap<>();
+                    devicePresets.put("", "<default>");
+                    for (String dev : Sound.getDeviceNames()) {
+                        devicePresets.put(dev, dev);
+                    }
+                    return devicePresets;
+                },
+                value -> {
+                    if (value.isEmpty()) {
+                        return "<default>";
+                    }
+                    return value;
+                });
+        device.addSettingChangeListener(s -> Sound.setDeviceName(s.getSettingValue()));
         d.addStringSetting("soundDevice", device);
         devicePanel.add(device);
         gbc = d.makeGbc(0, 4, 2, 1);
         soundSettings.add(devicePanel, gbc);
         
         //--------------------------
+        // Sound Test
+        //--------------------------
+        JPanel soundTestPanel = new JPanel(new GridBagLayout());
+        soundTestPanel.setBorder(BorderFactory.createTitledBorder("Test sounds / Output Device"));
+        
+        SliderLongSetting volumeSlider = new SliderLongSetting(JSlider.HORIZONTAL, 0, 100, 0);
+        volumeSlider.setMajorTickSpacing(10);
+        volumeSlider.setMinorTickSpacing(5);
+        volumeSlider.setPaintTicks(true);
+        volumeSlider.setSettingValue(50L);
+        
+        soundFiles = new ComboStringSetting(new String[]{});
+        
+        JButton playSound = new JButton("Play");
+        playSound.addActionListener(new ActionListener() {
+
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                try {
+                    String file = soundFiles.getSettingValue();
+                    if (file != null && !file.isEmpty()) {
+                        long volume = volumeSlider.getSettingValue();
+                        Sound.play(soundsPath.getCurrentPath().resolve(file), volume, "test", -1);
+                    }
+                }
+                catch (Exception ex) {
+                    GuiUtil.showNonModalMessage(d, "Error Playing Sound",
+                            ex.toString(),
+                            JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        });
+        
+        soundTestPanel.add(new JLabel("File:"),
+                d.makeGbc(0, 0, 1, 1, GridBagConstraints.EAST));
+        soundTestPanel.add(soundFiles,
+                d.makeGbc(1, 0, 1, 1, GridBagConstraints.WEST));
+        soundTestPanel.add(new JLabel("Volume:"),
+                d.makeGbc(0, 1, 1, 1, GridBagConstraints.EAST));
+        soundTestPanel.add(playSound,
+                d.makeGbc(2, 0, 1, 1, GridBagConstraints.WEST));
+        soundTestPanel.add(volumeSlider,
+                d.makeGbc(1, 1, 2, 1, GridBagConstraints.WEST));
+        
+        gbc = d.makeGbc(0, 10, 3, 1);
+        gbc.insets = new Insets(20, 20, 5, 20);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        soundSettings.add(soundTestPanel, gbc);
+        
+        //--------------------------
         // Info
         //--------------------------
-        soundSettings.add(new JLabel("Wav files that probably work are 8 to 48kHz and 8 or 16 bit."),
+        soundSettings.add(new JLabel("<html><body width='300px'>Wav files that probably work are uncompressed PCM, 8-48kHz, 8/16bit "
+                + "(e.g. exported in Audacity as WAV Signed 16-bit PCM). If the file plays silent (but the default ones work), try making "
+                + "the sound longer (for example add some silence)."),
                 d.makeGbc(0, 6, 2, 1));
         
         //======
@@ -285,7 +341,15 @@ public class NotificationSettings extends SettingsPanel {
         });
         
         notificationsPanel.add(d.addSimpleBooleanSetting("nHideOnStart"),
-                d.makeGbc(0, 1, 1, 1, GridBagConstraints.WEST));
+                d.makeGbc(0, 1, 2, 1, GridBagConstraints.WEST));
+        
+        notificationsPanel.add(d.addSimpleBooleanSetting("nInfoMsgEnabled"),
+                d.makeGbc(0, 2, 1, 1, GridBagConstraints.WEST));
+        
+        gbc = d.makeGbcStretchHorizontal(1, 2, 1, 1);
+        gbc.insets = new Insets(5, 3, 5, 30);
+        notificationsPanel.add(d.addSimpleStringSetting("nInfoMsgTarget", 5, true),
+                gbc);
         
         String tip = StringUtil.randomString(new String[]{
             "Tip: Double-click on Sound column to directly open on the 'Sound' tab.",
@@ -294,39 +358,19 @@ public class NotificationSettings extends SettingsPanel {
         });
         GuiUtil.makeGbc(0, 1, 2, 1, GridBagConstraints.WEST);
         notificationsPanel.add(new JLabel(tip),
-                d.makeGbc(0, 2, 1, 1, GridBagConstraints.WEST));
+                d.makeGbc(0, 3, 2, 1, GridBagConstraints.WEST));
         
         //=======
         // Other
         //=======
-        JPanel follows = addTitledPanel("Followed Streams", 2);
-        gbc = d.makeGbc(0, 0, 1, 1, GridBagConstraints.WEST);
-        requestFollowedStreams = d.addSimpleBooleanSetting("requestFollowedStreams",
-                "Request followed streams", "Allows Chatty to know "
-                        + "about live streams you follow to notify you and "
-                        + "display a list of them");
-        follows.add(requestFollowedStreams, gbc);
-        
-        gbc = d.makeGbc(1, 0, 1, 1, GridBagConstraints.WEST);
-        userReadPermission = new LinkLabel("", d.getLinkLabelListener());
-        follows.add(userReadPermission, gbc);
-        
+        add(new LinkLabel("Followed Streams setting moved to [settings:LIVE_STREAMS Live Streams Settings]",
+                d.getLinkLabelListener()), getGbc(10));
         
         updateSettingsState();
     }
     
     protected static String l(String id) {
         return Language.getString("settings.notifications."+id);
-    }
-    
-    protected void setUserReadPermission(boolean enabled) {
-        if (enabled) {
-            userReadPermission.setText("Required access available. ([help:followed ?])");
-        } else {
-            userReadPermission.setText("User read access required. ([help:followed ?])");
-        }
-        requestFollowedStreams.setEnabled(enabled);
-        
     }
     
     private void updateSettingsState() {
@@ -352,8 +396,15 @@ public class NotificationSettings extends SettingsPanel {
     
     
     protected void scanFiles(boolean showMessage) {
-        
         Path path = soundsPath.getCurrentPath();
+        if (path == null) {
+            if (showMessage) {
+                JOptionPane.showMessageDialog(this, "Invalid sound folder");
+            }
+            editor.setSoundFiles(Chatty.getPath(PathType.SETTINGS), new String[0]);
+            filesResult.setText("Error");
+            return;
+        }
         Debugging.println("scan Files "+path);
         File file = path.toFile();
         File[] files = file.listFiles(new WavFilenameFilter());
@@ -374,11 +425,19 @@ public class NotificationSettings extends SettingsPanel {
             }
             Arrays.sort(fileNames);
             editor.setSoundFiles(path, fileNames);
+            soundFiles.clear();
+            for (String fileName : fileNames) {
+                soundFiles.add(fileName);
+            }
         }
         if (showMessage) {
             JOptionPane.showMessageDialog(this, resultText+warningText);
         }
         filesResult.setText(resultText);
+    }
+
+    public void selectItem(long id) {
+        editor.setSelected(id);
     }
     
     private class MyButtonListener implements ActionListener {

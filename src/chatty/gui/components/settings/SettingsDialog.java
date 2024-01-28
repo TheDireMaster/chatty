@@ -3,21 +3,25 @@ package chatty.gui.components.settings;
 
 import chatty.gui.GuiUtil;
 import chatty.util.colors.HtmlColors;
-import chatty.gui.LaF;
-import chatty.gui.LaF.LaFSettings;
+import chatty.gui.laf.LaF;
+import chatty.gui.laf.LaF.LaFSettings;
 import chatty.gui.MainGui;
 import chatty.gui.components.LinkLabel;
 import chatty.gui.components.LinkLabelListener;
+import chatty.gui.components.settings.Tree.HighlightTreeCellRenderer;
 import chatty.lang.Language;
 import chatty.util.Sound;
 import chatty.util.StringUtil;
 import chatty.util.api.TokenInfo;
 import chatty.util.api.usericons.Usericon;
+import chatty.util.colors.ColorCorrectionNew;
 import chatty.util.settings.Setting;
 import chatty.util.settings.Settings;
 import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Container;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
@@ -29,14 +33,19 @@ import java.awt.event.ActionListener;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.swing.*;
 import javax.swing.tree.DefaultMutableTreeNode;
 
@@ -50,6 +59,40 @@ public class SettingsDialog extends JDialog implements ActionListener {
     
     private final static Logger LOGGER = Logger.getLogger(SettingsDialog.class.getName());
     
+    private static SettingsDialog INSTANCE;
+    
+    /**
+     * Get the SettingsDialog instance and apply an action to it. Creates the
+     * dialog when first used.
+     * 
+     * @param g
+     * @param action 
+     */
+    public static void get(MainGui g, Consumer<SettingsDialog> action) {
+        if (INSTANCE == null) {
+            if (action == null) {
+                INSTANCE = new SettingsDialog(g, g.getSettings());
+            }
+            else {
+                // invokeLater to give whatever called this a chance to finish
+                // (e.g. closing menu)
+                SwingUtilities.invokeLater(() -> {
+                    g.getGlassPane().setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+                    g.getGlassPane().setVisible(true);
+                    long start = System.currentTimeMillis();
+                    INSTANCE = new SettingsDialog(g, g.getSettings());
+                    System.out.println("Settings init: "+(System.currentTimeMillis() - start));
+                    g.getGlassPane().setCursor(Cursor.getDefaultCursor());
+                    g.getGlassPane().setVisible(false);
+                    action.accept(INSTANCE);
+                });
+            }
+        }
+        else {
+            action.accept(INSTANCE);
+        }
+    }
+    
     private final JButton ok = new JButton(Language.getString("dialog.button.save"));
     private final JButton cancel = new JButton(Language.getString("dialog.button.cancel"));
     
@@ -57,11 +100,13 @@ public class SettingsDialog extends JDialog implements ActionListener {
             "ffz", "nod3d", "noddraw",
             "userlistWidth", "userlistMinWidth", "userlistEnabled",
             "capitalizedNames", "correctlyCapitalizedNames", "ircv3CapitalizedNames",
-            "tabOrder", "tabsMwheelScrolling", "tabsMwheelScrollingAnywhere", "inputFont",
-            "bttvEmotes", "botNamesBTTV", "botNamesFFZ", "ffzEvent",
+            "inputFont",
+            "bttvEmotes", "botNamesBTTV", "botNamesFFZ", "ffzEvent", "seventv",
             "logPath", "logTimestamp", "logSplit", "logSubdirectories",
-            "tabsPlacement", "tabsLayout", "logLockFiles", "logMessageTemplate",
-            "laf", "lafTheme", "lafFontScale", "language", "timezone"
+            "logLockFiles", "logMessageTemplate",
+            "laf", "lafTheme", "lafFontScale", "language", "timezone", "locale",
+            "userDialogMessageLimit", "cachePath", "imgPath", "exportPath",
+            "webp"
     ));
     
     private final Set<String> reconnectRequiredDef = new HashSet<>(Arrays.asList(
@@ -85,15 +130,12 @@ public class SettingsDialog extends JDialog implements ActionListener {
     private final HashMap<String,ListSetting> listSettings = new HashMap<>();
     private final HashMap<String,MapSetting> mapSettings = new HashMap<>();
     
+    private final Map<Page, SettingsPanel> panels = new LinkedHashMap<>();
+    
     final Settings settings;
     private final MainGui owner;
     
-    private final NotificationSettings notificationSettings;
-    private final UsercolorSettings usercolorSettings;
-    private final MsgColorSettings msgColorSettings;
-    private final ImageSettings imageSettings;
-    private final HotkeySettings hotkeySettings;
-    private final NameSettings nameSettings;
+    private final MatchingPresets matchingPresets;
     
     public enum Page {
         MAIN("Main", Language.getString("settings.page.main")),
@@ -107,9 +149,10 @@ public class SettingsDialog extends JDialog implements ActionListener {
         HIGHLIGHT("Highlight", Language.getString("settings.page.highlight")),
         IGNORE("Ignore", Language.getString("settings.page.ignore")),
         FILTER("Filter", Language.getString("settings.page.filter")),
+        CUSTOM_TABS("Custom Tabs", Language.getString("settings.page.customTabs")),
         HISTORY("History", Language.getString("settings.page.history")),
         NOTIFICATIONS("Notifications", Language.getString("settings.page.notifications")),
-        SOUNDS("Sounds", Language.getString("settings.page.sound")),
+        LIVE_STREAMS("Live Streams", Language.getString("settings.page.liveStreams")),
         USERCOLORS("Usercolors", Language.getString("settings.page.usercolors")),
         LOGGING("Log to file", Language.getString("settings.page.logging")),
         WINDOW("Window", Language.getString("settings.page.window")),
@@ -122,7 +165,8 @@ public class SettingsDialog extends JDialog implements ActionListener {
         CHAT("Chat", Language.getString("settings.page.chat")),
         NAMES("Names", Language.getString("settings.page.names")),
         MODERATION("Moderation", Language.getString("settings.page.moderation")),
-        STREAM("Stream", Language.getString("settings.page.stream"));
+        STREAM("Stream", Language.getString("settings.page.stream")),
+        SIMPLE("Simple Settings", Language.getString("settings.page.simple"));
         
         public final String name;
         public final String displayName;
@@ -166,12 +210,13 @@ public class SettingsDialog extends JDialog implements ActionListener {
             Page.HIGHLIGHT,
             Page.IGNORE,
             Page.FILTER,
+            Page.CUSTOM_TABS,
             Page.LOGGING,
         }));
         MENU.put(Page.WINDOW, Arrays.asList(new Page[]{
             Page.TABS,
             Page.NOTIFICATIONS,
-            Page.SOUNDS,
+            Page.LIVE_STREAMS
         }));
         MENU.put(Page.OTHER, Arrays.asList(new Page[]{
             Page.COMMANDS,
@@ -181,6 +226,7 @@ public class SettingsDialog extends JDialog implements ActionListener {
             Page.STREAM,
             Page.HOTKEYS,
         }));
+        MENU.put(Page.SIMPLE, Arrays.asList(new Page[]{}));
     }
 
     public SettingsDialog(final MainGui owner, final Settings settings) {
@@ -213,8 +259,10 @@ public class SettingsDialog extends JDialog implements ActionListener {
         setLayout(new GridBagLayout());
         GridBagConstraints gbc;
 
+        //--------------------------
         // Create and add tree
-        selection = Tree.createTree(MENU);
+        //--------------------------
+        selection = Tree.createTree(MENU, searchHighlightColor);
         selection.setSelectionRow(0);
         selection.setBorder(BorderFactory.createEtchedBorder());
         JScrollPane selectionScroll = new JScrollPane(selection);
@@ -227,8 +275,10 @@ public class SettingsDialog extends JDialog implements ActionListener {
         gbc.weightx = 0;
         gbc.weighty = 1;
         add(selectionScroll, gbc);
-
-        // Create setting pages, the order here doesn't matter
+        
+        //--------------------------
+        // Create setting pages
+        //--------------------------
         cardManager = new CardLayout();
         cards = new JPanel(cardManager) {
             
@@ -241,40 +291,43 @@ public class SettingsDialog extends JDialog implements ActionListener {
             }
             
         };
-        cards.add(new MainSettings(this), Page.MAIN.name);
-        cards.add(new MessageSettings(this), Page.MESSAGES.name);
-        cards.add(new ModerationSettings(this), Page.MODERATION.name);
-        cards.add(new EmoteSettings(this), Page.EMOTES.name);
-        imageSettings = new ImageSettings(this);
-        cards.add(imageSettings, Page.USERICONS.name);
-        cards.add(new LookSettings(this), Page.LOOK.name);
-        cards.add(new FontSettings(this), Page.FONTS.name);
-        cards.add(new ColorSettings(this, settings), Page.CHATCOLORS.name);
-        cards.add(new HighlightSettings(this), Page.HIGHLIGHT.name);
-        cards.add(new IgnoreSettings(this), Page.IGNORE.name);
-        cards.add(new FilterSettings(this), Page.FILTER.name);
-        msgColorSettings = new MsgColorSettings(this);
-        cards.add(msgColorSettings, Page.MSGCOLORS.name);
-        cards.add(new HistorySettings(this), Page.HISTORY.name);
-        cards.add(new SoundSettings(this), Page.SOUNDS.name);
-        notificationSettings = new NotificationSettings(this, settings);
-        cards.add(notificationSettings, Page.NOTIFICATIONS.name);
-        usercolorSettings = new UsercolorSettings(this);
-        cards.add(usercolorSettings, Page.USERCOLORS.name);
-        cards.add(new LogSettings(this), Page.LOGGING.name);
-        cards.add(new WindowSettings(this), Page.WINDOW.name);
-        cards.add(new TabSettings(this), Page.TABS.name);
-        cards.add(new CommandSettings(this), Page.COMMANDS.name);
-        cards.add(new OtherSettings(this), Page.OTHER.name);
-        cards.add(new AdvancedSettings(this), Page.ADVANCED.name);
-        hotkeySettings = new HotkeySettings(this);
-        cards.add(hotkeySettings, Page.HOTKEYS.name);
-        cards.add(new CompletionSettings(this), Page.COMPLETION.name);
-        cards.add(new ChatSettings(this), Page.CHAT.name);
-        nameSettings = new NameSettings(this);
-        cards.add(nameSettings, Page.NAMES.name);
-        cards.add(new StreamSettings(this), Page.STREAM.name);
-
+        
+        panels.put(Page.MAIN, new MainSettings(this));
+        panels.put(Page.MESSAGES, new MessageSettings(this));
+        panels.put(Page.MODERATION, new ModerationSettings(this));
+        panels.put(Page.EMOTES, new EmoteSettings(this));
+        panels.put(Page.USERICONS, new ImageSettings(this));
+        panels.put(Page.LOOK, new LookSettings(this));
+        panels.put(Page.FONTS, new FontSettings(this));
+        panels.put(Page.CHATCOLORS, new ColorSettings(this, settings));
+        panels.put(Page.HIGHLIGHT, new HighlightSettings(this));
+        panels.put(Page.IGNORE, new IgnoreSettings(this));
+        panels.put(Page.FILTER, new FilterSettings(this));
+        panels.put(Page.CUSTOM_TABS, new RoutingSettings(this));
+        panels.put(Page.MSGCOLORS, new MsgColorSettings(this));
+        panels.put(Page.HISTORY, new HistorySettings(this));
+        panels.put(Page.NOTIFICATIONS, new NotificationSettings(this, settings));
+        panels.put(Page.LIVE_STREAMS, new LiveStreamsSettings(this));
+        panels.put(Page.USERCOLORS, new UsercolorSettings(this));
+        panels.put(Page.LOGGING, new LogSettings(this));
+        panels.put(Page.WINDOW, new WindowSettings(this));
+        panels.put(Page.TABS, new TabSettings(this));
+        panels.put(Page.COMMANDS, new CommandSettings(this));
+        panels.put(Page.OTHER, new OtherSettings(this));
+        panels.put(Page.ADVANCED, new AdvancedSettings(this));
+        panels.put(Page.HOTKEYS, new HotkeySettings(this));
+        panels.put(Page.COMPLETION, new CompletionSettings(this));
+        panels.put(Page.CHAT, new ChatSettings(this));
+        panels.put(Page.NAMES, new NameSettings(this));
+        panels.put(Page.STREAM, new StreamSettings(this));
+        panels.put(Page.SIMPLE, new SimpleSettings(this));
+        
+        for (Map.Entry<Page, SettingsPanel> entry : panels.entrySet()) {
+            cards.add(entry.getValue(), entry.getKey().name);
+        }
+        
+        matchingPresets = new MatchingPresets(this);
+        
         // Track current settings page
         currentlyShown = Page.MAIN;
         selection.addTreeSelectionListener(e -> {
@@ -284,14 +337,18 @@ public class SettingsDialog extends JDialog implements ActionListener {
             }
         });
         
+        //--------------------------
         // Cards
-        gbc = makeGbc(1,0,2,1);
+        //--------------------------
+        gbc = makeGbc(1,0,3,1);
         gbc.fill = GridBagConstraints.BOTH;
         gbc.weightx = 1;
         gbc.weighty = 1;
         add(cards, gbc);
         
+        //--------------------------
         // Help Link
+        //--------------------------
         gbc = makeGbc(0,2,1,1);
         gbc.anchor = GridBagConstraints.NORTHWEST;
         gbc.insets = new Insets(0,10,0,0);
@@ -299,35 +356,86 @@ public class SettingsDialog extends JDialog implements ActionListener {
 
             @Override
             public void linkClicked(String type, String ref) {
-                owner.openHelp("help-settings.html", currentlyShown.name);
+                if (currentlyShown == Page.COMMANDS) {
+                    owner.openHelp("help-custom_commands.html", "");
+                }
+                else {
+                    owner.openHelp("help-settings.html", currentlyShown.name);
+                }
             }
         }), gbc);
         
-        // Buttons
-        ok.setMnemonic(KeyEvent.VK_S);
+        //--------------------------
+        // Search
+        //--------------------------
+        JPanel searchPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        JTextField searchField = new JTextField(10);
+        GuiUtil.addChangeListener(searchField.getDocument(), e -> {
+            search(searchField.getText());
+        });
+        
+        JLabel searchLabel = new JLabel(Language.getString("settings.search"));
+        searchLabel.setLabelFor(searchField);
+        
+        JButton resetSearchButton = new JButton(Language.getString("settings.resetSearch"));
+        GuiUtil.smallButtonInsets(resetSearchButton);
+        resetSearchButton.addActionListener(e -> {
+            searchField.setText("");
+        });
+        
+        searchPanel.add(searchLabel);
+        searchPanel.add(searchField);
+        searchPanel.add(resetSearchButton);
+        
         gbc = makeGbc(1,2,1,1);
-        gbc.weightx = 0.5;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        gbc.insets = new Insets(2, 10, 0, 0);
+        add(searchPanel, gbc);
+        
+        //--------------------------
+        // Buttons
+        //--------------------------
+        ok.setMnemonic(KeyEvent.VK_S);
+        gbc = makeGbc(2,2,1,1);
         gbc.anchor = GridBagConstraints.EAST;
         gbc.insets = new Insets(4,3,8,8);
         gbc.ipadx = 16;
         gbc.ipady = 4;
-        ok.setMargin(GuiUtil.SMALL_BUTTON_INSETS);
+        GuiUtil.smallButtonInsets(ok);
         add(ok,gbc);
         cancel.setMnemonic(KeyEvent.VK_C);
-        gbc = makeGbc(2,2,1,1);
-        gbc.weightx = 0;
+        gbc = makeGbc(3,2,1,1);
         gbc.anchor = GridBagConstraints.WEST;
         gbc.insets = new Insets(4,3,8,8);
         gbc.ipadx = 16;
         gbc.ipady = 4;
-        cancel.setMargin(GuiUtil.SMALL_BUTTON_INSETS);
+        GuiUtil.smallButtonInsets(cancel);
         add(cancel,gbc);
         
         // Button Listeners
         ok.addActionListener(this);
         cancel.addActionListener(this);
-
+        
         pack();
+    }
+    
+    /**
+     * Get the panel of the given class. As long as only one panel per class is
+     * added (which should be normal for this), this should work fine.
+     * 
+     * @param <T>
+     * @param c
+     * @return 
+     */
+    private <T> T getPanel(Class<T> c) {
+        for (SettingsPanel panel : panels.values()) {
+            if (panel.getClass().equals(c)) {
+                return c.cast(panel);
+            }
+        }
+        return null;
     }
     
     /**
@@ -342,7 +450,7 @@ public class SettingsDialog extends JDialog implements ActionListener {
         // Initialize
         //------------
         loadSettings();
-        notificationSettings.setUserReadPermission(settings.getList("scopes").contains(TokenInfo.Scope.USERINFO.scope));
+        getPanel(LiveStreamsSettings.class).setUserReadPermission(settings.getList("scopes").contains(TokenInfo.Scope.FOLLOWS.scope));
         if (action != null) {
             editDirectly(action, parameter);
         }
@@ -389,23 +497,60 @@ public class SettingsDialog extends JDialog implements ActionListener {
             public void run() {
                 if (action.equals("editUsercolorItem")) {
                     showPanel(Page.USERCOLORS);
-                    usercolorSettings.editItem((String)parameter);
+                    getPanel(UsercolorSettings.class).editItem((String)parameter);
                 } else if (action.equals("editCustomNameItem")) {
                     showPanel(Page.NAMES);
-                    nameSettings.editCustomName((String)parameter);
+                    getPanel(NameSettings.class).editCustomName((String)parameter);
                 } else if (action.equals("addUsericonOfBadgeType")) {
                     showPanel(Page.USERICONS);
                     Usericon icon = (Usericon)parameter;
-                    imageSettings.addUsericonOfBadgeType(icon.type, icon.badgeType.toString());
+                    getPanel(ImageSettings.class).addUsericonOfBadgeType(icon.type, icon.badgeType.toString());
                 } else if (action.equals("addUsericonOfBadgeTypeAllVariants")) {
                     showPanel(Page.USERICONS);
                     Usericon icon = (Usericon)parameter;
-                    imageSettings.addUsericonOfBadgeType(icon.type, icon.badgeType.id);
+                    getPanel(ImageSettings.class).addUsericonOfBadgeType(icon.type, icon.badgeType.id);
+                } else if (action.equals("selectHighlight")) {
+                    showPanel(Page.HIGHLIGHT);
+                    @SuppressWarnings("unchecked") // By convention
+                    Collection<String> data = (Collection<String>) parameter;
+                    getPanel(HighlightSettings.class).selectItems(data);
+                } else if (action.equals("selectIgnore")) {
+                    showPanel(Page.IGNORE);
+                    @SuppressWarnings("unchecked") // By convention
+                    Collection<String> data = (Collection<String>) parameter;
+                    getPanel(IgnoreSettings.class).selectItems(data);
+                } else if (action.equals("selectMsgColor")) {
+                    showPanel(Page.MSGCOLORS);
+                    getPanel(MsgColorSettings.class).selectItem((String) parameter);
+                } else if (action.equals("selectRouting")) {
+                    showPanel(Page.CUSTOM_TABS);
+                    @SuppressWarnings("unchecked") // By convention
+                    Collection<String> data = (Collection<String>) parameter;
+                    getPanel(RoutingSettings.class).selectItems(data);
+                } else if (action.equals("selectNotification")) {
+                    showPanel(Page.NOTIFICATIONS);
+                    @SuppressWarnings("unchecked") // By convention
+                    long id = Long.parseLong((String) parameter);
+                    getPanel(NotificationSettings.class).selectItem(id);
+                } else if (action.equals("show")) {
+                    showPage((String) parameter);
+                } else if (action.equals("editHotkey")) {
+                    showPanel(Page.HOTKEYS);
+                    getPanel(HotkeySettings.class).edit((String) parameter);
                 }
             }
         });
     }
-
+    
+    public void showPage(String page) {
+        try {
+            showPanel(Page.valueOf(page));
+        }
+        catch (IllegalArgumentException ex) {
+            LOGGER.warning("Invalid settings page: "+page);
+        }
+    }
+    
     private void showPanel(Page page) {
         cardManager.show(cards, page.name);
         currentlyShown = page;
@@ -423,21 +568,26 @@ public class SettingsDialog extends JDialog implements ActionListener {
         loadListSettings();
         loadMapSettings();
         updateBackgroundColor();
-        usercolorSettings.setData(owner.getUsercolorData());
-        msgColorSettings.setData(owner.getMsgColorData());
-        imageSettings.setData(owner.getUsericonData());
-        imageSettings.setTwitchBadgeTypes(owner.getTwitchBadgeTypes());
-        hotkeySettings.setData(owner.hotkeyManager.getActionsMap(),
-                owner.hotkeyManager.getData(), owner.hotkeyManager.globalHotkeysAvailable());
-        notificationSettings.setData(owner.getNotificationData());
+        getPanel(UsercolorSettings.class).setData(owner.getUsercolorData());
+        getPanel(MsgColorSettings.class).setData(owner.getMsgColorData());
+        getPanel(ImageSettings.class).setData(owner.getUsericonData());
+        getPanel(ImageSettings.class).setHiddenBadgesData(owner.getHiddenBadgesData());
+        getPanel(ImageSettings.class).setTwitchBadgeTypes(owner.getTwitchBadgeTypes());
+        getPanel(HotkeySettings.class).setData(owner.hotkeyManager.getActionsMap(),
+                owner.hotkeyManager.getDescriptionsMap(),
+                owner.hotkeyManager.getData(),
+                owner.hotkeyManager.globalHotkeysAvailable());
+        getPanel(NotificationSettings.class).setData(owner.getNotificationData());
+        getPanel(EmoteSettings.class).setData(owner.localEmotes.getData());
+        getPanel(RoutingSettings.class).setData(owner.routingManager.getData());
     }
     
     public void updateBackgroundColor() {
         Color foreground = HtmlColors.decode(getStringSetting("foregroundColor"));
-        msgColorSettings.setDefaultForeground(foreground);
+        getPanel(MsgColorSettings.class).setDefaultForeground(foreground);
         Color background = HtmlColors.decode(getStringSetting("backgroundColor"));
-        usercolorSettings.setDefaultBackground(background);
-        msgColorSettings.setDefaultBackground(background);
+        getPanel(UsercolorSettings.class).setDefaultBackground(background);
+        getPanel(MsgColorSettings.class).setDefaultBackground(background);
     }
     
     /**
@@ -500,11 +650,14 @@ public class SettingsDialog extends JDialog implements ActionListener {
         saveIntegerSettings();
         saveListSettings();
         saveMapSettings();
-        owner.setUsercolorData(usercolorSettings.getData());
-        owner.setMsgColorData(msgColorSettings.getData());
-        owner.setUsericonData(imageSettings.getData());
-        owner.hotkeyManager.setData(hotkeySettings.getData());
-        owner.setNotificationData(notificationSettings.getData());
+        owner.setUsercolorData(getPanel(UsercolorSettings.class).getData());
+        owner.setMsgColorData(getPanel(MsgColorSettings.class).getData());
+        owner.setUsericonData(getPanel(ImageSettings.class).getData());
+        owner.setHiddenBadgesData(getPanel(ImageSettings.class).getHiddenBadgesData());
+        owner.hotkeyManager.setData(getPanel(HotkeySettings.class).getData());
+        owner.setNotificationData(getPanel(NotificationSettings.class).getData());
+        owner.localEmotes.setData(getPanel(EmoteSettings.class).getData());
+        owner.routingManager.setData(getPanel(RoutingSettings.class).getData());
         if (restartRequired) {
             JOptionPane.showMessageDialog(this, RESTART_REQUIRED_INFO, "Info", JOptionPane.INFORMATION_MESSAGE);
         }
@@ -596,6 +749,10 @@ public class SettingsDialog extends JDialog implements ActionListener {
         }
     }
     
+    protected void showMatchingPresets() {
+        matchingPresets.show(this);
+    }
+    
     protected static GridBagConstraints makeGbc(int x, int y, int w, int h) {
         return makeGbc(x, y, w, h, GridBagConstraints.CENTER);
     }
@@ -641,6 +798,18 @@ public class SettingsDialog extends JDialog implements ActionListener {
         gbc.gridheight = h;
         gbc.insets = new Insets(1,18,2,5);
         gbc.anchor = anchor;
+        return gbc;
+    }
+    
+    protected static GridBagConstraints makeGbcStretchHorizontal(int x, int y, int w, int h) {
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = x;
+        gbc.gridy = y;
+        gbc.gridwidth = w;
+        gbc.gridheight = h;
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1;
         return gbc;
     }
     
@@ -793,6 +962,10 @@ public class SettingsDialog extends JDialog implements ActionListener {
     }
     
     protected ComboLongSetting addComboLongSetting(String name, int... choices) {
+        return addComboLongSetting(name, false, choices);
+    }
+    
+    protected ComboLongSetting addComboLongSetting(String name, boolean editable, int... choices) {
         Map<Long, String> localizedChoices = new LinkedHashMap<>();
         for (Integer choice : choices) {
             String label = Language.getString("settings.long."+name+".option."+choice, false);
@@ -802,6 +975,7 @@ public class SettingsDialog extends JDialog implements ActionListener {
             localizedChoices.put((long)choice, label);
         }
         ComboLongSetting result = new ComboLongSetting(localizedChoices);
+        result.setEditable(editable);
         result.setToolTipText(SettingsUtil.addTooltipLinebreaks(Language.getString("settings.long."+name+".tip", false)));
         longSettings.put(name, result);
         return result;
@@ -855,8 +1029,10 @@ public class SettingsDialog extends JDialog implements ActionListener {
         return result;
     }
     
-    protected SimpleTableEditor addStringMapSetting(String name, int width, int height) {
-        SimpleTableEditor<String> table = new SimpleTableEditor<String>(this) {
+    protected SimpleTableEditor<String> addStringMapSetting(String name,
+            int width, int height,
+            String keyLabel, String valueLabel) {
+        SimpleTableEditor<String> table = new SimpleTableEditor<String>(this, String.class, keyLabel, valueLabel) {
 
             @Override
             protected String valueFromString(String input) {
@@ -868,16 +1044,69 @@ public class SettingsDialog extends JDialog implements ActionListener {
         return table;
     }
     
-    protected SimpleTableEditor addLongMapSetting(String name, int width, int height) {
-        SimpleTableEditor<Long> table = new SimpleTableEditor<Long>(this) {
+    protected SimpleTableEditor<Long> addLongMapSetting(String name,
+            int width, int height,
+            String keyLabel, String valueLabel) {
+        SimpleTableEditor<Long> table = new SimpleTableEditor<Long>(this, Long.class, keyLabel, valueLabel) {
 
             @Override
             protected Long valueFromString(String input) {
-                return Long.valueOf(input);
+                try {
+                    return Long.valueOf(input);
+                }
+                catch (NumberFormatException ex) {
+                    return (long)0;
+                }
             }
         };
         table.setValueFilter("[^0-9]");
         table.setPreferredSize(new Dimension(width, height));
+        table.setTableEditorEditAllHandler(new TableEditor.TableEditorEditAllHandler<SimpleTableEditor.MapItem<Long>>() {
+            
+            private final Pattern PARSE_LINE = Pattern.compile("(.*) (-?[0-9]+)");
+            
+            @Override
+            public String toString(List<SimpleTableEditor.MapItem<Long>> data) {
+                StringBuilder b = new StringBuilder();
+                for (SimpleTableEditor.MapItem<Long> entry : data) {
+                    b.append(entry.key).append(" ").append(entry.value).append("\n");
+                }
+                return b.toString();
+            }
+
+            @Override
+            public List<SimpleTableEditor.MapItem<Long>> toData(String input) {
+                List<SimpleTableEditor.MapItem<Long>> result = new ArrayList<>();
+                String[] split = StringUtil.splitLines(input);
+                for (String line : split) {
+                    Matcher m = PARSE_LINE.matcher(line);
+                    if (m.matches()) {
+                        try {
+                            result.add(new SimpleTableEditor.MapItem<>(m.group(1), Long.valueOf(m.group(2))));
+                        }
+                        catch (NumberFormatException ex) {
+                            // Don't add
+                        }
+                    }
+                }
+                return result;
+            }
+
+            @Override
+            public StringEditor getEditor() {
+                return null;
+            }
+
+            @Override
+            public String getEditorTitle() {
+                return "Edit all entries";
+            }
+
+            @Override
+            public String getEditorHelp() {
+                return null;
+            }
+        });
         mapSettings.put(name, table);
         return table;
     }
@@ -913,6 +1142,7 @@ public class SettingsDialog extends JDialog implements ActionListener {
     private void close() {
         owner.hotkeyManager.setEnabled(true);
         setVisible(false);
+        dispose();
     }
     
     protected LinkLabelListener getLinkLabelListener() {
@@ -921,6 +1151,169 @@ public class SettingsDialog extends JDialog implements ActionListener {
     
     protected LinkLabelListener getSettingsHelpLinkLabelListener() {
         return settingsHelpLinkLabelListener;
+    }
+    
+    //==========================
+    // Search
+    //==========================
+    private final Color searchHighlightColor = ColorCorrectionNew.offset(getBackground(), 0.8f);
+    private final Map<Component, State> stateBeforeSearch = new HashMap<>();
+    
+    private static class State {
+        private final Color color;
+        private final boolean opaque;
+
+        public State(Color color, boolean opaque) {
+            this.color = color;
+            this.opaque = opaque;
+        }
+        
+    }
+    
+    /**
+     * Search for a given text in the Settings Dialog. The previous search
+     * results are reset. The search is case-insensitive.
+     * 
+     * @param search Must be longer than 2 characters, otherwise the search is
+     * just reset
+     */
+    private void search(String search) {
+        resetSearchHighlights();
+        if (search != null && search.length() > 2) {
+            search = StringUtil.toLowerCase(search);
+            for (Map.Entry<Page, SettingsPanel> panel : panels.entrySet()) {
+                int numResults = search2(search, panel.getValue());
+                if (numResults > 0) {
+                    ((HighlightTreeCellRenderer) selection.getCellRenderer()).setHighlight(panel.getKey(), true);
+                }
+            }
+        }
+        selection.repaint();
+    }
+    
+    private void addSearchHighlight(Component comp) {
+        if (stateBeforeSearch.containsKey(comp)) {
+            return;
+        }
+        JComponent component = (JComponent) comp;
+        Color color = comp.isBackgroundSet() ? comp.getBackground() : null;
+        stateBeforeSearch.put(comp, new State(color, component.isOpaque()));
+        if (!component.isOpaque()) {
+            component.setOpaque(true);
+        }
+        comp.setBackground(searchHighlightColor);
+    }
+    
+    private void resetSearchHighlights() {
+        // Tree
+        for (Page page : panels.keySet()) {
+            ((HighlightTreeCellRenderer) selection.getCellRenderer()).setHighlight(page, false);
+        }
+        // Components
+        for (Map.Entry<Component, State> entry : stateBeforeSearch.entrySet()) {
+            Component comp = entry.getKey();
+            if (comp instanceof JTabbedPane) {
+                JTabbedPane tabs = (JTabbedPane) comp;
+                for (int i=0; i<tabs.getTabCount(); i++) {
+                    tabs.setBackgroundAt(i, null);
+                }
+            }
+            else {
+                JComponent component = (JComponent) entry.getKey();
+                component.setBackground(entry.getValue().color);
+                component.setOpaque(entry.getValue().opaque);
+            }
+        }
+        stateBeforeSearch.clear();
+    }
+    
+    /**
+     * Recursive search through all components.
+     * 
+     * @param search
+     * @param container
+     * @return 
+     */
+    private int search2(String search, Container container) {
+        int numResults = 0;
+        for (Component comp : container.getComponents()) {
+            int subResults = 0;
+            // Search children of container
+            if (comp instanceof Container
+                    && !(comp instanceof JList)
+                    && !(comp instanceof JTable)) {
+                subResults = search2(search, (Container) comp);
+            }
+            // Highlight parent if results have been found
+            if (subResults > 0) {
+                if (comp instanceof JTabbedPane) {
+                    JTabbedPane tabs = (JTabbedPane) comp;
+                    boolean highlighted = false;
+                    for (int i = 0; i < tabs.getTabCount(); i++) {
+                        for (Component hl : stateBeforeSearch.keySet()) {
+                            if (SwingUtilities.isDescendingFrom(hl, tabs.getComponentAt(i))) {
+                                tabs.setBackgroundAt(i, searchHighlightColor);
+                                highlighted = true;
+                            }
+                        }
+                    }
+                    if (highlighted) {
+                        stateBeforeSearch.put(tabs, null);
+                    }
+                }
+            }
+            // Check this component
+            if (checkSearchComponent(comp, search)) {
+                numResults++;
+                addSearchHighlight(comp);
+            }
+            numResults += subResults;
+        }
+        return numResults;
+    }
+    
+    /**
+     * Check a single component for the searched text.
+     * 
+     * @param comp
+     * @param search
+     * @return 
+     */
+    private boolean checkSearchComponent(Component comp, String search) {
+        if (comp instanceof JLabel) {
+            if (checkSearchText(((JLabel) comp).getText(), search)) {
+                return true;
+            }
+            if (checkSearchText(((JLabel) comp).getToolTipText(), search)) {
+                return true;
+            }
+        }
+        if (comp instanceof JEditorPane) {
+            if (checkSearchText(((JEditorPane) comp).getText(), search)) {
+                return true;
+            }
+        }
+        if (comp instanceof JCheckBox) {
+            if (checkSearchText(((JCheckBox) comp).getText(), search)) {
+                return true;
+            }
+            if (checkSearchText(((JCheckBox) comp).getToolTipText(), search)) {
+                return true;
+            }
+        }
+        if (comp instanceof JButton) {
+            if (checkSearchText(((JButton) comp).getText(), search)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    private boolean checkSearchText(String text, String search) {
+        if (text == null || search == null) {
+            return false;
+        }
+        return StringUtil.toLowerCase(text).contains(search);
     }
     
 }

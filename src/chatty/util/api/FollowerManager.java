@@ -2,9 +2,13 @@
 package chatty.util.api;
 
 import chatty.util.DateTime;
+import chatty.util.Debugging;
 import chatty.util.JSONUtil;
 import chatty.util.StringUtil;
 import chatty.util.api.Follower.Type;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -14,6 +18,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.logging.Logger;
 import java.util.Optional;
+import java.util.function.Consumer;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
@@ -131,9 +136,9 @@ public class FollowerManager {
                 if (!r.hasError()) {
                     String streamId = r.getId(stream);
                     if (type == Follower.Type.FOLLOWER) {
-                        api.requests.requestFollowers(streamId, stream);
+                        api.requests.requestFollowersNew(streamId, stream);
                     } else if (type == Follower.Type.SUBSCRIBER) {
-                        api.requests.requestSubscribers(streamId, stream, api.getToken());
+                        api.requests.requestSubscribers(streamId, stream);
                     }
                 } else {
                     FollowerInfo errorResult = new FollowerInfo(type, stream, "Could not resolve id");
@@ -174,22 +179,68 @@ public class FollowerManager {
      * @param stream The name of the stream this data is for
      * @param json The data returned from the API
      */
-    protected synchronized void received(int responseCode, String stream, String json) {
-        FollowerInfo result = parseFollowers(stream, json);
+    protected void received(int responseCode, String stream, String json) {
+        FollowerInfo result = null;
+        if (type == Follower.Type.FOLLOWER) {
+            result = parseFollowers(stream, json);
+        }
+        else if (type == Follower.Type.SUBSCRIBER) {
+            result = parseSubscribers(stream, json);
+        }
         if (result != null) {
-            noError(stream);
-            cached.put(stream, result);
-            if (type == Follower.Type.FOLLOWER) {
-                listener.receivedFollowers(result);
-                if (hasNewFollowers(result.followers)) {
-                    listener.newFollowers(result);
-                }
-            } else if (type == Follower.Type.SUBSCRIBER) {
-                listener.receivedSubscribers(result);
-            }
-            requested.add(stream);
+            addAccountCreationTimes(result, updatedInfo -> {
+                processResult(updatedInfo.stream, updatedInfo);
+            });
         } else {
             parseRequestError(responseCode, stream);
+        }
+    }
+    
+    /**
+     * Requests user info for all the followers and adds the account creation
+     * dates to a new FollowerInfo object. Must only be called with a valid
+     * FollowerInfo.
+     * 
+     * @param info The FollowerInfo to be updated
+     * @param resultListener Called with the updated FollowerInfo object
+     */
+    private void addAccountCreationTimes(FollowerInfo info, Consumer<FollowerInfo> resultListener) {
+        List<String> usernames = info.getUsernames();
+        if (usernames.isEmpty()) {
+            resultListener.accept(info);
+        }
+        else {
+            api.userInfoManager.getCached(this, usernames, (t) -> {
+                List<Follower> updatedFollowers = new ArrayList<>();
+                for (Follower f : info.followers) {
+                    UserInfo userInfo = t.get(f.name);
+                    if (userInfo != null) {
+                        updatedFollowers.add(f.setAccountCreationTime(userInfo.createdAt));
+                    }
+                    else {
+                        updatedFollowers.add(f);
+                    }
+                }
+                FollowerInfo updatedInfo = info.replaceFollowers(updatedFollowers);
+                resultListener.accept(updatedInfo);
+            });
+        }
+    }
+    
+    private void processResult(String stream, FollowerInfo result) {
+        synchronized (this) {
+            noError(stream);
+            cached.put(stream, result);
+            requested.add(stream);
+        }
+        if (type == Follower.Type.FOLLOWER) {
+            listener.receivedFollowers(result);
+            if (hasNewFollowers(result.followers)) {
+                listener.newFollowers(result);
+            }
+        }
+        else if (type == Follower.Type.SUBSCRIBER) {
+            listener.receivedSubscribers(result);
         }
     }
 
@@ -201,25 +252,49 @@ public class FollowerManager {
      * @param stream The name of the stream this data is for
      * @param json The data returned from the API
      */
-    protected synchronized void receivedSingle(int responseCode, String stream, String json, String username) {
-        if (!cachedSingle.containsKey(stream)) {
-            cachedSingle.put(stream, new HashMap<>());
-        }
-        if (responseCode == 404) {
-            listener.receivedFollower(stream, username, TwitchApi.RequestResultCode.NOT_FOUND, null);
-            cachedSingle.get(stream).put(username, new Follower(type, username, null, -1, -1, false, false));
-        } else {
-            // Parsing adds to alreadyFollowed automatically
-            Follower result = parseFollowerSingle(stream, username, json);
-            if (result != null) {
+    protected synchronized void receivedSingle(int responseCode, String stream, String json, String username, boolean ownFollow) {
+        // Parsing adds to alreadyFollowed automatically
+        FollowerInfo followerInfo = ownFollow ? parseOwnFollow(stream, username, json) : parseFollowers(stream, json);
+        if (followerInfo != null) {
+            if (!cachedSingle.containsKey(stream)) {
+                cachedSingle.put(stream, new HashMap<>());
+            }
+            if (followerInfo.followers.isEmpty()) {
+                listener.receivedFollower(stream, username, TwitchApi.RequestResultCode.NOT_FOUND, null);
+                cachedSingle.get(stream).put(username, new Follower(type, username, null, -1, -1, false, false, null, null));
+            }
+            else {
+                Follower result = followerInfo.followers.get(0);
                 cachedSingle.get(stream).put(username, result);
                 listener.receivedFollower(stream, username, TwitchApi.RequestResultCode.SUCCESS, result);
-            } else {
-                listener.receivedFollower(stream, username, TwitchApi.RequestResultCode.FAILED, null);
             }
         }
+        else {
+            listener.receivedFollower(stream, username, TwitchApi.RequestResultCode.FAILED, null);
+        }
     }
-
+    
+    private FollowerInfo parseOwnFollow(String stream, String userName, String json) {
+        try {
+            JSONParser parser = new JSONParser();
+            JSONObject root = (JSONObject) parser.parse(json);
+            JSONArray data = (JSONArray) root.get("data");
+            
+            if (!data.isEmpty()) {
+                JSONObject channelFollow = (JSONObject) data.get(0);
+                long followedAt = DateTime.parseDatetime((String) channelFollow.get("followed_at"));
+                Follower follower = createFollowerItem(stream, userName, null, followedAt, -1, null, null);
+                List<Follower> result = new ArrayList<>();
+                result.add(follower);
+                return new FollowerInfo(type, stream, result, -1, -1);
+            }
+            return new FollowerInfo(type, stream, new ArrayList<>(), -1, -1);
+        } catch (ParseException ex) {
+            LOGGER.warning("Error parsing "+type+": "+ex);
+            return null;
+        }
+    }
+    
     private FollowerInfo parseFollowers(String stream, String json) {
         List<Follower> result = new ArrayList<>();
         int total = -1;
@@ -229,74 +304,89 @@ public class FollowerManager {
         }
         try {
             JSONParser parser = new JSONParser();
-            Object root = parser.parse(json);
-            if (!(root instanceof JSONObject)) {
-                LOGGER.warning("Error parsing "+type+": root should be object");
-                return null;
-            }
-            JSONObject data = (JSONObject)root;
+            JSONObject root = (JSONObject) parser.parse(json);
+            JSONArray data = (JSONArray) root.get("data");
             
-            Object follows = data.get("follows");
-            if (type == Follower.Type.SUBSCRIBER) {
-                follows = data.get("subscriptions");
-            }
-            if (!(follows instanceof JSONArray)) {
-                LOGGER.warning("Error parsing "+type+": follows/subs should be object");
-                return null;
-            }
-            for (Object o : (JSONArray)follows) {
-                Follower follower = parseFollower(stream, o);
+            for (Object o : data) {
+                Follower follower = parseFollower(stream, (JSONObject) o);
                 if (follower != null) {
                     result.add(follower);
                 }
             }
-            Object totalObject = data.get("_total");
-            if (totalObject instanceof Number) {
-                total = ((Number)totalObject).intValue();
-            }
+            total = JSONUtil.getInteger(root, "total", -1);
         } catch (ParseException ex) {
             LOGGER.warning("Error parsing "+type+": "+ex);
             return null;
         }
-        return new FollowerInfo(type, stream, result, total);
+        return new FollowerInfo(type, stream, result, total, -1);
     }
     
-    private Follower parseFollower(String stream, Object o) {
+    private Follower parseFollower(String stream, JSONObject data) {
         try {
-            JSONObject data = (JSONObject)o;
-            String created_at = (String)data.get("created_at");
-            long time = DateTime.parseDatetime(created_at);
-            JSONObject user = (JSONObject)data.get("user");
-            String display_name = (String)user.get("display_name");
-            String name = (String)user.get("name");
-            String userCreatedString = JSONUtil.getString(user, "created_at");
-            long userCreated = -1;
-            if (userCreatedString != null) {
-                userCreated = DateTime.parseDatetime(userCreatedString);
+            long followedAt = DateTime.parseDatetime((String) data.get("followed_at"));
+            String display_name = JSONUtil.getString(data, "from_name");
+            if (display_name == null) {
+                // Field in new API endpoint
+                display_name = JSONUtil.getString(data, "user_name");
             }
-            
-            return createFollowerItem(stream, name, display_name, time, userCreated);
+            String name = JSONUtil.getString(data, "from_login");
+            if (name == null) {
+                // Field in new API endpoint
+                name = JSONUtil.getString(data, "user_login");
+            }
+            return createFollowerItem(stream, name, display_name, followedAt, -1, null, null);
         } catch (Exception ex) {
-            LOGGER.warning("Error parsing entry of "+type+": "+o+" ["+ex+"]");
+            LOGGER.warning("Error parsing entry of "+type+": "+data+" ["+ex+"]");
         }
         return null;
     }
-
-    private Follower parseFollowerSingle(String stream, String user, String json) {
+    
+    private FollowerInfo parseSubscribers(String stream, String json) {
+        if (json == null) {
+            return null;
+        }
         try {
             JSONParser parser = new JSONParser();
-            Object root = parser.parse(json);
-            if (!(root instanceof JSONObject)) {
-                LOGGER.warning("Error parsing "+type+": root should be object");
-                return null;
+            JSONObject root = (JSONObject) parser.parse(json);
+            JSONArray data = (JSONArray) root.get("data");
+            
+            List<Follower> result = new ArrayList<>();
+            int total = JSONUtil.getInteger(root, "total", -1);
+            int totalPoints = JSONUtil.getInteger(root, "points", -1);
+            
+            for (Object o : data) {
+                JSONObject entry = (JSONObject) o;
+                String username = JSONUtil.getString(entry, "user_login");
+                String display_name = JSONUtil.getString(entry, "user_name");
+                String info = "";
+                String verboseInfo = "";
+                switch (JSONUtil.getString(entry, "tier", "")) {
+                    case "1000":
+                        info += "T1";
+                        break;
+                    case "2000":
+                        info += "T2";
+                        break;
+                    case "3000":
+                        info += "T3";
+                        break;
+                }
+                verboseInfo = JSONUtil.getString(entry, "plan_name");
+                if (JSONUtil.getBoolean(entry, "is_gift", false)) {
+                    info += String.format(" (%s)",
+                            JSONUtil.getString(entry, "gifter_login"));
+                    verboseInfo += String.format(" (gifted by %s)",
+                            JSONUtil.getString(entry, "gifter_login"));
+                }
+                Follower f = createFollowerItem(stream, username, display_name, -1, -1, info, verboseInfo);
+                if (f != null) {
+                    result.add(f);
+                }
             }
-            JSONObject data = (JSONObject)root;
-            String created_at = (String)data.get("created_at");
-            long time = DateTime.parseDatetime(created_at);
-
-            return createFollowerItem(stream, user, user, time, -1);
-        } catch (Exception ex) {
-            LOGGER.warning("Error parsing entry of "+type+" for user "+user+": "+json+" ["+ex+"]");
+            return new FollowerInfo(type, stream, result, total, totalPoints);
+        }
+        catch (Exception ex) {
+            LOGGER.warning("Error parsing subscribers: "+ex);
         }
         return null;
     }
@@ -310,7 +400,7 @@ public class FollowerManager {
      * @param time
      * @return 
      */
-    private Follower createFollowerItem(String stream, String name, String display_name, long time, long userTime) {
+    private synchronized Follower createFollowerItem(String stream, String name, String display_name, long time, long userTime, String info, String verboseInfo) {
         if (name == null) {
             return null;
         }
@@ -340,7 +430,7 @@ public class FollowerManager {
         if (!requested.contains(stream)) {
             newFollow = false;
         }
-        Follower newEntry = new Follower(type, name, display_name, time, userTime, refollow, newFollow);
+        Follower newEntry = new Follower(type, name, display_name, time, userTime, refollow, newFollow, info, verboseInfo);
         if (existingEntry == null) {
             alreadyFollowed.get(stream).put(name, newEntry);
         }
@@ -355,7 +445,7 @@ public class FollowerManager {
         }
     }
 
-    private void parseRequestError(int responseCode, String stream) {
+    private synchronized void parseRequestError(int responseCode, String stream) {
         String errorMessage = "";
         if (responseCode == 404) {
             errorMessage = "Channel not found.";
@@ -407,16 +497,23 @@ public class FollowerManager {
     
     private void requestSingleFollower(String stream, String streamId, String username, String userId) {
         if (streamId != null && userId != null) {
-            api.requests.getSingleFollower(stream, streamId, username, userId);
+            api.requests.getSingleFollowerNew(stream, streamId, username, userId);
         } else {
             api.userIDs.getUserIDsAsap(r -> {
                 if (r.hasError()) {
                     listener.receivedFollower(stream, username, TwitchApi.RequestResultCode.FAILED, null);
                 } else {
-                    api.requests.getSingleFollower(stream, r.getId(stream), username, r.getId(username));
+                    api.requests.getSingleFollowerNew(stream, r.getId(stream), username, r.getId(username));
                 }
             }, stream, username);
         }
+    }
+    
+    private static final Instant OLD_FOLLOW_API_OFF = ZonedDateTime.of(2023, 8, 3, 0, 0, 0, 0, ZoneId.of("-07:00")).toInstant();
+//    private static final Instant OLD_FOLLOW_API_OFF = ZonedDateTime.of(2023, 6, 17, 20, 29, 0, 0, ZoneId.of("+02:00")).toInstant(); // For testing only
+    
+    public static boolean forceNewFollowsApi() {
+        return Debugging.isEnabled("newfollowerapi") || Instant.now().isAfter(OLD_FOLLOW_API_OFF);
     }
     
 }

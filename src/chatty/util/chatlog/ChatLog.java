@@ -3,12 +3,15 @@ package chatty.util.chatlog;
 
 import chatty.Chatty;
 import chatty.Helper;
+import chatty.Room;
 import chatty.User;
+import chatty.gui.components.textpane.ModLogInfo;
 import chatty.util.DateTime;
 import chatty.util.DateTime.Formatting;
-import chatty.util.StringUtil;
+import chatty.util.Timestamp;
 import chatty.util.api.ChannelInfo;
 import chatty.util.api.StreamInfo.ViewerStats;
+import chatty.util.api.UserInfo;
 import chatty.util.api.pubsub.ModeratorActionData;
 import chatty.util.commands.CustomCommand;
 import chatty.util.commands.Parameters;
@@ -16,8 +19,8 @@ import chatty.util.settings.Settings;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.text.SimpleDateFormat;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.logging.Logger;
 
@@ -31,8 +34,8 @@ public class ChatLog {
     
     private static final Logger LOGGER = Logger.getLogger(ChatLog.class.getName());
     
-    private SimpleDateFormat sdf;
-    private CustomCommand messageTemplate;
+    private Timestamp timestamp;
+    private final CustomCommand messageTemplate;
     
     private final Map<String, Compact> compactForChannels;
     
@@ -59,12 +62,12 @@ public class ChatLog {
         }
         compactForChannels = new HashMap<>();
         try {
-            String timestamp = settings.getString("logTimestamp");
-            if (!timestamp.equals("off")) {
-                sdf = new SimpleDateFormat(timestamp);
+            String timestampValue = settings.getString("logTimestamp");
+            if (!timestampValue.equals("off")) {
+                timestamp = new Timestamp(timestampValue, "");
             }
         } catch (IllegalArgumentException ex) {
-            sdf = null;
+            timestamp = null;
         }
         CustomCommand c = CustomCommand.parse(settings.getString("logMessageTemplate"));
         if (c.hasError()) {
@@ -82,17 +85,12 @@ public class ChatLog {
      * be created
      */
     private Path createPath() {
-        String pathToUse = Chatty.getUserDataDirectory()+"logs";
-        String customPath = settings.getString("logPath");
-        if (!customPath.isEmpty()) {
-            pathToUse = customPath;
-        }
-        try {
-            return Paths.get(pathToUse);
-        } catch (InvalidPathException ex) {
-            LOGGER.warning("Invalid path for chatlog: "+pathToUse);
+        String invalidPath = Chatty.getInvalidCustomPath(Chatty.PathType.LOGS);
+        if (invalidPath != null) {
+            LOGGER.warning("Invalid path for chatlog: "+invalidPath);
             return null;
         }
+        return Chatty.getPath(Chatty.PathType.LOGS);
     }
     
     /**
@@ -115,21 +113,32 @@ public class ChatLog {
             return;
         }
         if (isSettingEnabled("logBits") && isChanEnabled(channel)) {
-            writeLine(channel, String.format("%sBITS: %s (%d)",
+            writeLine(channel, String.format(Locale.ROOT, "%sBITS: %s (%d)",
                     timestamp(),
                     user.getRegularDisplayNick(),
                     amount));
         }
     }
     
-    public void message(String channel, User user, String message, boolean action) {
+    /**
+     * Log a regular chat message.
+     * 
+     * @param channel The channel to log to (normally the channel received in,
+     * highlighted/ignore messages could be different)
+     * @param user The user that sent the message
+     * @param message The message text
+     * @param action Whether the message is an action message
+     * @param includedChannel Channel name to include in the log line (probably
+     * due to it being logged into another file, like highlighted), can be null
+     */
+    public void message(String channel, User user, String message, boolean action, String includedChannel) {
         if (isSettingEnabled("logMessage") && isChanEnabled(channel)) {
             Parameters param = messageParam(
                             user,
                             message,
                             action,
                             settings,
-                            sdf != null ? DateTime.currentTime(sdf) : "");
+                            timestamp(user.getRoom(), includedChannel, false));
             String line = messageTemplate.replace(param);
             if (line != null && !line.isEmpty()) {
                 writeLine(channel, line);
@@ -149,9 +158,9 @@ public class ChatLog {
         return p;
     }
 
-    public void info(String channel, String message) {
+    public void info(String channel, String message, String includedChannel) {
         if (isSettingEnabled("logInfo") && isChanEnabled(channel)) {
-            writeLine(channel, timestamp()+message);
+            writeLine(channel, timestamp(null, includedChannel, true)+message);
         }
     }
     
@@ -164,7 +173,7 @@ public class ChatLog {
             writeLine(channel, timestamp()+String.format("MOD_ACTION: %s (%s%s)",
                     data.created_by,
                     data.moderation_action,
-                    data.args.isEmpty() ? "" : " "+StringUtil.join(data.args, " ")));
+                    data.args.isEmpty() ? "" : " "+ModLogInfo.makeArgsText(data)));
         }
     }
 
@@ -198,7 +207,7 @@ public class ChatLog {
     }
     
     public void userBanned(String channel, String nick, long duration,
-            String reason, ChannelInfo info) {
+            String reason, UserInfo info) {
         String text = nick;
         if (duration > 0) {
             text += " ("+duration+"s)";
@@ -257,10 +266,23 @@ public class ChatLog {
     }
     
     private String timestamp() {
-        if (sdf == null) {
+        return timestamp(null, null, true);
+    }
+    
+    private String timestamp(Room room, String includedChannel, boolean appendSpace) {
+        String space = appendSpace ? " " : "";
+        if (includedChannel != null) {
+            if (timestamp != null) {
+                return timestamp.make(-1, room)+"["+includedChannel+"]"+space;
+            }
+            return "["+includedChannel+"]"+space;
+        }
+        else {
+            if (timestamp != null) {
+                return timestamp.make(-1, room)+space;
+            }
             return "";
         }
-        return DateTime.currentTime(sdf)+" ";
     }
     
     /**
@@ -292,10 +314,10 @@ public class ChatLog {
         
         // Check non-channel files (not affected by logMode, seems already
         // separate enough to handle it separately from channels)
-        if (channel.equals("_highlighted")) {
+        if (channel.equals("highlighted")) {
             return settings.getBoolean("logHighlighted2");
         }
-        if (channel.equals("_ignored")) {
+        if (channel.equals("ignored")) {
             return settings.getBoolean("logIgnored2");
         }
         

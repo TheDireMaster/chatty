@@ -9,12 +9,17 @@ import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.util.Arrays;
 import java.util.function.Function;
+import javax.swing.AbstractButton;
+import javax.swing.BorderFactory;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JRadioButton;
+import javax.swing.border.Border;
 
 /**
  *
@@ -25,12 +30,58 @@ public class SettingsUtil {
     public static void addSubsettings(JCheckBox control, Component... subs) {
         control.addItemListener(e -> {
             for (Component sub : subs) {
-                sub.setEnabled(control.isSelected() && control.isEnabled());
+                if (sub != control) {
+                    sub.setEnabled(control.isSelected() && control.isEnabled());
+                }
             }
         });
         control.addPropertyChangeListener("enabled", e -> {
             for (Component sub : subs) {
-                sub.setEnabled(control.isSelected() && control.isEnabled());
+                if (sub != control) {
+                    sub.setEnabled(control.isSelected() && control.isEnabled());
+                }
+            }
+        });
+        for (Component sub : subs) {
+            if (sub != control) {
+                sub.setEnabled(false);
+            }
+        }
+    }
+    
+    public static void addSubsettings(JRadioButton[] radioButtons, Component... subs) {
+        Runnable update = () -> {
+            boolean enabled = false;
+            for (JRadioButton button : radioButtons) {
+                if (button.isSelected() && button.isEnabled()) {
+                    enabled = true;
+                    break;
+                }
+            }
+            for (Component comp : subs) {
+                if (!Arrays.asList(radioButtons).contains(comp)) {
+                    comp.setEnabled(enabled);
+                }
+            }
+        };
+        for (JRadioButton button : radioButtons) {
+            button.addItemListener(e -> {
+                update.run();
+            });
+        }
+        for (JRadioButton button : radioButtons) {
+            button.addPropertyChangeListener("enabled", e -> {
+                update.run();
+            });
+        }
+        update.run();
+    }
+
+    public static void addSubsettings(ComboStringSetting control, Function<String, Boolean> req, Component... subs) {
+        control.addSettingChangeListener(c -> {
+            String selected = control.getSettingValue();
+            for (Component sub : subs) {
+                sub.setEnabled(req.apply(selected));
             }
         });
         for (Component sub : subs) {
@@ -38,9 +89,9 @@ public class SettingsUtil {
         }
     }
     
-    public static void addSubsettings(ComboStringSetting control, Function<String, Boolean> req, Component... subs) {
-        control.addItemListener(e -> {
-            String selected = control.getSettingValue();
+    public static void addSubsettings(ComboLongSetting control, Function<Long, Boolean> req, Component... subs) {
+        control.addSettingChangeListener(c -> {
+            Long selected = control.getSettingValue();
             for (Component sub : subs) {
                 sub.setEnabled(req.apply(selected));
             }
@@ -122,10 +173,45 @@ public class SettingsUtil {
     }
     
     public static void addLabeledComponent(JPanel panel, String labelSettingName, int x, int y, int w, int labelAlign, JComponent component) {
+        addLabeledComponent(panel, labelSettingName, x, y, w, labelAlign, component, false);
+    }
+    
+    public static void addLabeledComponent(JPanel panel, String labelSettingName, int x, int y, int w, int labelAlign, JComponent component, boolean stretchComponent) {
         JLabel label = createLabel(labelSettingName);
         label.setLabelFor(component);
         panel.add(label, SettingsDialog.makeGbc(x, y, 1, 1, labelAlign));
-        panel.add(component, SettingsDialog.makeGbc(x+1, y, w, 1, GridBagConstraints.WEST));
+        GridBagConstraints gbc = SettingsDialog.makeGbc(x+1, y, w, 1, GridBagConstraints.WEST);
+        if (stretchComponent) {
+            gbc.fill = GridBagConstraints.BOTH;
+        }
+        panel.add(component, gbc);
+    }
+    
+    public static void setTextAndTooltip(AbstractButton button, String langKey) {
+        button.setText(Language.getString(langKey));
+        button.setToolTipText(SettingsUtil.addTooltipLinebreaks(Language.getString(langKey+".tip")));
+    }
+    
+    public static void addStandardSetting(JPanel panel, String name, int y, JComponent component) {
+        addStandardSetting(panel, name, y, component, false);
+    }
+    
+    public static void addStandardSubSetting(JPanel panel, String name, int y, JComponent component) {
+        addStandardSetting(panel, name, y, component, true);
+    }
+    
+    public static void addStandardSetting(JPanel panel, String name, int y, JComponent component, boolean sub) {
+        if (component instanceof JCheckBox) {
+            if (sub) {
+                panel.add(component, SettingsDialog.makeGbcSub(0, y, 2, 1, GridBagConstraints.WEST));
+            }
+            else {
+                panel.add(component, SettingsDialog.makeGbc(0, y, 2, 1, GridBagConstraints.WEST));
+            }
+        }
+        else {
+            addLabeledComponent(panel, name, 0, y, 1, GridBagConstraints.EAST, component);
+        }
     }
     
     public static JPanel createPanel(String settingName, JComponent... settingComponent) {
@@ -141,6 +227,17 @@ public class SettingsUtil {
             panel.add(comp, gbc);
             gbc.gridx++;
         }
+        return panel;
+    }
+    
+    private static final Border PADDING = BorderFactory.createEmptyBorder(5, 5, 5, 5);
+    
+    public static JPanel topAlign(JPanel panel, int y) {
+        // Fill up remaining space to top-align components
+        GridBagConstraints gbc = SettingsDialog.makeGbc(0, y, 1, 1, GridBagConstraints.WEST);
+        gbc.weighty = 1;
+        panel.add(new JLabel(), gbc);
+        panel.setBorder(PADDING);
         return panel;
     }
     

@@ -1,6 +1,7 @@
 
 package chatty.gui.components.menus;
 
+import chatty.Helper;
 import chatty.TwitchClient;
 import chatty.User;
 import chatty.lang.Language;
@@ -37,6 +38,10 @@ public class UserContextMenu extends ContextMenu {
         this.msgId = msgId;
         this.autoModMsgId = autoModMsgId;
         
+        Parameters parameters = Parameters.create(user.getRegularDisplayNick());
+        parameters.putObject("room", user.getRoom());
+        Helper.addUserParameters(user, msgId, autoModMsgId, parameters);
+        
         addItem("userinfo", Language.getString("userCm.user", user.getDisplayNick()));
         if (client != null) {
             List<UserRoom> rooms = client.getOpenUserRooms(user);
@@ -63,7 +68,7 @@ public class UserContextMenu extends ContextMenu {
             }
         }
         addSeparator();
-        ContextMenuHelper.addStreamsOptions(this, 1, false);
+        ContextMenuHelper.addStreamsOptions(this, 1, false, parameters);
         addSeparator();
         addItem("join", Language.getString("userCm.join", user.getName()));
         addSeparator();
@@ -80,11 +85,10 @@ public class UserContextMenu extends ContextMenu {
         ContextMenuHelper.addIgnore(this, user.getName(), MISC_MENU, false);
         ContextMenuHelper.addIgnore(this, user.getName(), MISC_MENU, true);
         addSeparator(MISC_MENU);
-        addItem("follow", Language.getString("userCm.follow"), MISC_MENU);
-        addItem("unfollow", Language.getString("userCm.unfollow"), MISC_MENU);
-        addSeparator(MISC_MENU);
         addItem("setcolor", Language.getString("userCm.setColor"), MISC_MENU);
         addItem("setname", Language.getString("userCm.setName"), MISC_MENU);
+        addSeparator(MISC_MENU);
+        addItem("notes", "Notes", MISC_MENU);
         
         // Get the preset categories from the addressbook, which may be empty
         // if not addressbook is set to this user
@@ -118,8 +122,8 @@ public class UserContextMenu extends ContextMenu {
                 addItem("addressbookEdit", Language.getString("dialog.button.add"), submenu);
             }
         }
-
-        CommandMenuItems.addCommands(CommandMenuItems.MenuType.USER, this);
+        
+        CommandMenuItems.addCommands(CommandMenuItems.MenuType.USER, this, parameters);
     }
 
     @Override

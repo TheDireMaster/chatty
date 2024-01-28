@@ -4,6 +4,7 @@ package chatty.gui.components.settings;
 import chatty.gui.components.LinkLabelListener;
 import chatty.gui.components.settings.Editor.Tester;
 import chatty.lang.Language;
+import chatty.util.SyntaxHighlighter;
 import java.awt.Dimension;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
@@ -14,10 +15,14 @@ import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import javax.swing.*;
+import javax.swing.event.ChangeEvent;
 import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
 
@@ -48,7 +53,14 @@ public class ListSelector extends JPanel implements ListSetting<String> {
     private DataFormatter<String> formatter;
     
     private StringEditor editor;
-    private final Editor allEditor;
+    private Supplier<StringEditor> editorCreator;
+    private Editor allEditor;
+    private final Supplier<Editor> allEditorCreator;
+    private LinkLabelListener linkLabelListener;
+    private Tester tester;
+    private SyntaxHighlighter syntaxHighlighter;
+    
+    private Consumer<List<String>> changeListener;
 
     public ListSelector(Window parent, String title, boolean manualSorting,
             boolean alphabeticSorting) {
@@ -189,10 +201,14 @@ public class ListSelector extends JPanel implements ListSetting<String> {
         
         updateEditButtons();
 
-        editor = new Editor(parent);
-        allEditor = new Editor(parent);
-        allEditor.setAllowLinebreaks(true);
-        allEditor.setAllowEmpty(true);
+        // Default editors
+        editorCreator = () -> new Editor(parent);
+        allEditorCreator = () -> {
+            Editor e = new Editor(parent);
+            e.setAllowLinebreaks(true);
+            e.setAllowEmpty(true);
+            return e;
+        };
     }
     
     public void setInfo(String info) {
@@ -200,18 +216,46 @@ public class ListSelector extends JPanel implements ListSetting<String> {
     }
     
     public void setInfoLinkLabelListener(LinkLabelListener listener) {
-        editor.setLinkLabelListener(listener);
-        allEditor.setLinkLabelListener(listener);
+        if (editor != null) {
+            editor.setLinkLabelListener(listener);
+        }
+        if (allEditor != null) {
+            allEditor.setLinkLabelListener(listener);
+        }
+        this.linkLabelListener = listener;
     }
     
     public void setTester(Tester tester) {
         if (editor instanceof Editor) {
             ((Editor)editor).setTester(tester);
         }
+        this.tester = tester;
     }
     
-    public void setEditor(StringEditor editor) {
-        this.editor = editor;
+    public void setEditor(Supplier<StringEditor> editorCreator) {
+        // Set existing to null, so the new one is created next time it's used
+        this.editor = null;
+        this.editorCreator = editorCreator;
+    }
+    
+    private StringEditor getEditor() {
+        if (editor == null) {
+            editor = editorCreator.get();
+            editor.setLinkLabelListener(linkLabelListener);
+            if (editor instanceof Editor) {
+                ((Editor) editor).setSyntaxHighlighter(syntaxHighlighter);
+            }
+            setTester(tester);
+        }
+        return editor;
+    }
+    
+    private Editor getAllEditor() {
+        if (allEditor == null) {
+            allEditor = allEditorCreator.get();
+            allEditor.setLinkLabelListener(linkLabelListener);
+        }
+        return allEditor;
     }
     
     private void configureButton(JButton button, String icon, String tooltip) {
@@ -228,7 +272,7 @@ public class ListSelector extends JPanel implements ListSetting<String> {
      * in the list.
      */
     private void addItem() {
-        String item = editor.showDialog(
+        String item = getEditor().showDialog(
                 Language.getString("settings.listSelector.addEntry", title), "", info);
         item = format(item);
         if (item != null && !item.isEmpty() && !data.contains(item)) {
@@ -236,11 +280,13 @@ public class ListSelector extends JPanel implements ListSetting<String> {
             if (selectedIndex != -1) {
                 data.add(selectedIndex + 1, item);
                 list.setSelectedValue(item, true);
-            } else {
+            }
+            else {
                 data.addElement(item);
             }
             input.setText("");
         }
+        informListener();
     }
     
     /**
@@ -258,19 +304,21 @@ public class ListSelector extends JPanel implements ListSetting<String> {
                 list.setSelectedValue(data.get(selectedIndex - 1), true);
             }
         }
+        informListener();
     }
     
     private void changeItem() {
         String selectedValue = list.getSelectedValue();
         int selectedIndex = list.getSelectedIndex();
         if (selectedIndex > -1) {
-            String newValue = editor.showDialog(
+            String newValue = getEditor().showDialog(
                     Language.getString("settings.listSelector.editEntry", title), selectedValue, info);
             newValue = format(newValue);
             if (newValue != null && !newValue.isEmpty()) {
                 data.set(selectedIndex, newValue);
             }
         }
+        informListener();
     }
     
     private void editAll() {
@@ -278,7 +326,7 @@ public class ListSelector extends JPanel implements ListSetting<String> {
         for (int i=0;i<data.size();i++) {
             b.append(data.get(i)).append("\n");
         }
-        String result = allEditor.showDialog(
+        String result = getAllEditor().showDialog(
                 Language.getString("settings.listSelector.editAllEntries"), b.toString(), info);
         if (result != null) {
             String[] split = result.split("\n");
@@ -290,6 +338,7 @@ public class ListSelector extends JPanel implements ListSetting<String> {
                 }
             }
         }
+        informListener();
     }
 
     private void moveUp() {
@@ -298,6 +347,7 @@ public class ListSelector extends JPanel implements ListSetting<String> {
             swap(selectedIndex, selectedIndex -1);
             list.setSelectedValue(data.get(selectedIndex - 1), true);
         }
+        informListener();
     }
     
     private void moveDown() {
@@ -306,12 +356,14 @@ public class ListSelector extends JPanel implements ListSetting<String> {
             swap(selectedIndex, selectedIndex + 1);
             list.setSelectedValue(data.get(selectedIndex + 1), true);
         }
+        informListener();
     }
     
     private void swap(int index1, int index2) {
         String temp = data.get(index2);
         data.set(index2, data.get(index1));
         data.set(index1, temp);
+        informListener();
     }
     
     private void sort() {
@@ -365,6 +417,7 @@ public class ListSelector extends JPanel implements ListSetting<String> {
         for (String item : list) {
             data.addElement(item);
         }
+        informListener();
     }
 
     @Override
@@ -389,6 +442,16 @@ public class ListSelector extends JPanel implements ListSetting<String> {
         this.formatter = formatter;
     }
     
+    public void setSyntaxHighlighter(SyntaxHighlighter highlighter) {
+        if (highlighter == null) {
+            return;
+        }
+        this.syntaxHighlighter = highlighter;
+        if (editor instanceof Editor) {
+            ((Editor) editor).setSyntaxHighlighter(highlighter);
+        }
+    }
+    
     /**
      * Formats the given text according to the set {@code DataFormatter}, or
      * just returns the input if no formatter is set.
@@ -403,6 +466,43 @@ public class ListSelector extends JPanel implements ListSetting<String> {
             return formatter.format(input);
         }
         return input;
+    }
+    
+    public void setSelected(String item) {
+        list.setSelectedValue(item, true);
+    }
+    
+    /**
+     * Select all of the given items, if they are in the list. Tries to make all
+     * selected items visible, although the earlier ones in the given items are
+     * preferred.
+     * 
+     * @param items The items to select, can be null to remove selection
+     */
+    public void setSelected(Collection<String> items) {
+        list.clearSelection();
+        if (items != null) {
+            // Reverse list so earlier entries are scrolled to last
+            List<String> itemsReversed = new ArrayList<>(items);
+            Collections.reverse(itemsReversed);
+            for (String item : itemsReversed) {
+                int index = data.indexOf(item);
+                if (index != -1) {
+                    list.addSelectionInterval(index, index);
+                    list.ensureIndexIsVisible(index);
+                }
+            }
+        }
+    }
+    
+    public void setChangeListener(Consumer<List<String>> listener) {
+        this.changeListener = listener;
+    }
+    
+    private void informListener() {
+        if (changeListener != null) {
+            changeListener.accept(getData());
+        }
     }
     
 }

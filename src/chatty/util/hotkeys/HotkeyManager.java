@@ -4,6 +4,7 @@ package chatty.util.hotkeys;
 import chatty.Chatty;
 import chatty.Logging;
 import chatty.gui.MainGui;
+import chatty.util.StringUtil;
 import chatty.util.hotkeys.Hotkey.Type;
 import chatty.util.settings.Settings;
 import java.awt.KeyEventDispatcher;
@@ -12,6 +13,7 @@ import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,7 +27,9 @@ import javax.swing.ActionMap;
 import javax.swing.InputMap;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
+import javax.swing.JFrame;
 import javax.swing.JRootPane;
+import javax.swing.JWindow;
 import javax.swing.KeyStroke;
 
 /**
@@ -56,7 +60,7 @@ public class HotkeyManager {
     private final MainGui main;
     private final List<Hotkey> hotkeys = new ArrayList<>();
     private final Map<String, HotkeyAction> actions = new LinkedHashMap<>();
-    private final Map<JDialog, Object> popouts = new WeakHashMap<>();
+    private final Map<JRootPane, Object> popouts = new WeakHashMap<>();
     
     /**
      * Whether global hotkeys are currently to be enabled (registered).
@@ -134,11 +138,16 @@ public class HotkeyManager {
      * 
      * @param id The id to be referred to by the hotkey
      * @param label The label to be displayed to the user identifying the action
+     * @param description An optional description displayed to the user
      * @param action The action itself
      */
-    public void registerAction(String id, String label, Action action) {
-        HotkeyAction hotkeyAction = new HotkeyAction(id, label, action);
+    public void registerAction(String id, String label, String description, Action action) {
+        HotkeyAction hotkeyAction = new HotkeyAction(id, label, description, action);
         actions.put(id, hotkeyAction);
+    }
+    
+    public void registerAction(String id, String label, Action action) {
+        registerAction(id, label, null, action);
     }
     
     /**
@@ -147,9 +156,21 @@ public class HotkeyManager {
      *
      * @param popout 
      */
-    public void registerPopout(JDialog popout) {
-        popouts.put(popout, null);
-        addHotkeys(popout.getRootPane());
+    public void registerPopout(Object popout) {
+        JRootPane pane = null;
+        if (popout instanceof JWindow) {
+            pane = ((JWindow)popout).getRootPane();
+        }
+        else if (popout instanceof JFrame) {
+            pane = ((JFrame)popout).getRootPane();
+        }
+        else if (popout instanceof JDialog) {
+            pane = ((JDialog)popout).getRootPane();
+        }
+        if (pane != null) {
+            popouts.put(pane, null);
+            addHotkeys(pane);
+        }
     }
     
     /**
@@ -161,6 +182,16 @@ public class HotkeyManager {
         Map<String, String> map = new LinkedHashMap<>();
         for (HotkeyAction action : actions.values()) {
             map.put(action.id, action.label);
+        }
+        return map;
+    }
+    
+    public Map<String, String> getDescriptionsMap() {
+        Map<String, String> map = new HashMap<>();
+        for (HotkeyAction action : actions.values()) {
+            if (!StringUtil.isNullOrEmpty(action.description)) {
+                map.put(action.id, action.description);
+            }
         }
         return map;
     }
@@ -303,8 +334,8 @@ public class HotkeyManager {
             if (isValidHotkey(hotkey) && hotkey.type == Type.REGULAR) {
                 if (pane == null) {
                     addHotkey(hotkey, main.getRootPane());
-                    for (JDialog popout : popouts.keySet()) {
-                        addHotkey(hotkey, popout.getRootPane());
+                    for (JRootPane popoutPane : popouts.keySet()) {
+                        addHotkey(hotkey, popoutPane);
                     }
                 } else {
                     addHotkey(hotkey, pane);
@@ -351,8 +382,8 @@ public class HotkeyManager {
      */
     private void removeAllHotkeys() {
         removeHotkeys(main.getRootPane());
-        for (JDialog popout : popouts.keySet()) {
-            removeHotkeys(popout.getRootPane());
+        for (JRootPane popoutPane : popouts.keySet()) {
+            removeHotkeys(popoutPane);
         }
         removeGlobalHotkeys();
         removeHotkeysFromActions();

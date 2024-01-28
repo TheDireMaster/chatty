@@ -1,6 +1,8 @@
 
 package chatty.util;
 
+import chatty.Chatty;
+import chatty.Chatty.PathType;
 import java.awt.Component;
 import java.awt.Desktop;
 import java.awt.Graphics;
@@ -11,14 +13,18 @@ import java.awt.datatransfer.StringSelection;
 import java.awt.geom.AffineTransform;
 import java.awt.image.AffineTransformOp;
 import java.awt.image.BufferedImage;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.charset.Charset;
 import java.nio.file.Files;
+import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -49,25 +55,20 @@ public class MiscUtil {
         c.setContents(new StringSelection(text), null);
     }
     
-    public static boolean openFolder(File folder, Component parent) {
-        try {
-            Desktop.getDesktop().open(folder);
-        } catch (Exception ex) {
-            if (parent != null) {
-                JOptionPane.showMessageDialog(parent, "Opening folder failed.\n"+ex.getLocalizedMessage());
-            }
-            return false;
-        }
-        return true;
+    public static boolean openFile(Path folder, Component parent) {
+        return openFile(folder.toString(), parent);
     }
     
-    public static boolean openFile(String path, Component parent) {
+    public static boolean openFile(File file, Component parent) {
+        return openFile(file.toString(), parent);
+    }
+    
+    public static boolean openFile(String file, Component parent) {
         try {
-            File file = new File(path);
-            Desktop.getDesktop().open(file);
+            Desktop.getDesktop().open(new File(file));
         } catch (Exception ex) {
             if (parent != null) {
-                JOptionPane.showMessageDialog(parent, "Opening folder failed.\n"+ex.getLocalizedMessage());
+                JOptionPane.showMessageDialog(parent, "Opening file/folder failed.\n"+ex.getLocalizedMessage());
             }
             return false;
         }
@@ -81,7 +82,7 @@ public class MiscUtil {
                 JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.QUESTION_MESSAGE, null, new String[]{"Open File", "Cancel"}, 0);
         if (chosenOption == 0) {
-            return openFile(path, parent);
+            return MiscUtil.openFile(path, parent);
         }
         return false;
     }
@@ -223,7 +224,7 @@ public class MiscUtil {
     public static boolean biton(int value, int i) {
         return (value & (1 << i)) != 0;
     }
-
+    
     public static Image rotateImage(Image image) {
         BufferedImage bi;
         if (image instanceof BufferedImage) {
@@ -286,6 +287,75 @@ public class MiscUtil {
             }
             target.add(item);
         }
+    }
+    
+    public static boolean isBitEnabled(int value, int bit) {
+        return (value & bit) != 0;
+    }
+    
+    public static boolean isBitEnabled(long value, long bit) {
+        return (value & bit) != 0;
+    }
+    
+    /**
+     * Return the Set contained in the Map for the given key. If no Set exists
+     * for the key yet, a new HashSet is automatically created and added to the
+     * Map.
+     * 
+     * @param <K> The Map key type
+     * @param <V> The Set value type
+     * @param map The Map
+     * @param mapKey The Map key
+     * @return 
+     */
+    public static <K, V> Set<V> getSetFromMap(Map<K, Set<V>> map, K mapKey) {
+        if (!map.containsKey(mapKey)) {
+            map.put(mapKey, new HashSet<>());
+        }
+        return map.get(mapKey);
+    }
+    
+    public static boolean exportText(String fileName, String text, boolean append) {
+        Path file = Chatty.getPathCreate(PathType.EXPORT).resolve(fileName).toAbsolutePath().normalize();
+        if (!file.startsWith(Chatty.getPath(PathType.EXPORT))) {
+            LOGGER.warning("Invalid filename (may contain '..'?): " + fileName);
+            return false;
+        }
+        try {
+            OpenOption[] options = new OpenOption[]{
+                StandardOpenOption.CREATE,
+                StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING
+            };
+            if (append) {
+                options = new OpenOption[]{
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.WRITE,
+                    StandardOpenOption.APPEND
+                };
+            }
+            try (BufferedWriter writer = Files.newBufferedWriter(file, Charset.forName("UTF-8"), options)) {
+                writer.write(text);
+            }
+            LOGGER.info(String.format("Written text to file: %s [%s]",
+                    file, StringUtil.shortenTo(text, 10)));
+            return true;
+        }
+        catch (IOException ex) {
+            LOGGER.warning("Error writing text to file: " + ex);
+            return false;
+        }
+    }
+
+    public static String intern(String input) {
+        if (input == null) {
+            return null;
+        }
+        return input.intern();
+    }
+    
+    public static boolean isNumTrue(Object object) {
+        return object instanceof Number && ((Number) object).intValue() == 1;
     }
     
 }

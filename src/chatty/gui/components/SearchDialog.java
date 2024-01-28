@@ -38,6 +38,8 @@ public class SearchDialog extends JDialog {
     private final JButton searchButton = new JButton(Language.getString("searchDialog.button.search"));
     //private final JCheckBox highlightAll = new JCheckBox("Highlight all occurences");
     
+    private Channel chan;
+    
     private static final Map<Window, SearchDialog> created = new HashMap<>();
     
     public static void showSearchDialog(Channel channel, MainGui g, Window owner) {
@@ -48,13 +50,15 @@ public class SearchDialog extends JDialog {
             GuiUtil.installEscapeCloseOperation(dialog);
             created.put(owner, dialog);
         }
+        dialog.setChannel(channel);
         dialog.setVisible(true);
+        // I don't think this really changes anything, but just in case
+        dialog.pack();
     }
     
-    public SearchDialog(final MainGui g, final Window owner) {
+    private SearchDialog(final MainGui g, final Window owner) {
         super(owner);
         setTitle(Language.getString("searchDialog.title"));
-        setResizable(false);
         setLayout(new GridBagLayout());
  
         GridBagConstraints gbc = new GridBagConstraints();
@@ -62,11 +66,14 @@ public class SearchDialog extends JDialog {
         gbc.gridy = 0;
         gbc.gridwidth = 1;
         gbc.insets = new Insets(5,5,5,5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1;
         gbc.anchor = GridBagConstraints.WEST;
         
         add(searchText, gbc);
         gbc.gridx = 1;
-        searchButton.setMargin(GuiUtil.SMALL_BUTTON_INSETS);
+        gbc.weightx = 0;
+        GuiUtil.smallButtonInsets(searchButton);
         searchButton.setFocusable(false);
         add(searchButton, gbc);
 
@@ -82,7 +89,7 @@ public class SearchDialog extends JDialog {
 
             @Override
             public void actionPerformed(ActionEvent e) {
-                if (!g.search(owner, searchText.getText())) {
+                if (!g.search(chan, searchText.getText())) {
                     searchText.setBackground(COLOR_NO_RESULT);
                     timer.restart();
                 }
@@ -94,13 +101,17 @@ public class SearchDialog extends JDialog {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                g.resetSearch(owner);
+                g.resetSearch(chan);
                 searchText.setText(null);
                 searchText.setBackground(COLOR_NORMAL);
             }
         });
         
         pack();
+    }
+    
+    public void setChannel(Channel chan) {
+        this.chan = chan;
     }
     
 }

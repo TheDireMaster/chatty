@@ -21,7 +21,7 @@ public class CheerEmoticonManager extends CachedManager {
     private static final Logger LOGGER = Logger.getLogger(CheerEmoticonManager.class.getName());
 
     public static final int CACHED_EMOTICONS_EXPIRE_AFTER = 60 * 60 * 24;
-    private static final String FILE = Chatty.getCacheDirectory() + "cheer_emoticons";
+    private static final String FILE = Chatty.getPathCreate(Chatty.PathType.CACHE).resolve("cheer_emoticons").toString();
     
     private final TwitchApiResultListener listener;
     
@@ -45,7 +45,7 @@ public class CheerEmoticonManager extends CachedManager {
         JSONParser parser = new JSONParser();
         try {
             JSONObject root = (JSONObject)parser.parse(json);
-            JSONArray cheers = (JSONArray)root.get("actions");
+            JSONArray cheers = (JSONArray)root.get("data");
             for (Object entry : cheers) {
                 if (entry instanceof JSONObject) {
                     Set<CheerEmoticon> parsedEntry = getEntry((JSONObject)entry, stream);

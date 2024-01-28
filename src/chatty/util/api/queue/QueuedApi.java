@@ -1,12 +1,14 @@
 
 package chatty.util.api.queue;
 
-import java.util.Collections;
+import chatty.util.Debugging;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.PriorityBlockingQueue;
-import java.util.logging.Level;
+import java.util.concurrent.Semaphore;
 import java.util.logging.Logger;
 
 /**
@@ -33,29 +35,59 @@ public class QueuedApi {
      * Rate limit remaining from the most recent request response, or -1 if no
      * data is available yet.
      */
-    private int ratelimitRemaining = -1;
+    private volatile int ratelimitRemaining = -1;
+    
+    /**
+     * Limits the number of active requests. This is different to active threads
+     * which could be more, if a thread e.g. still keeps going after the actual
+     * API request (e.g. download badge images).
+     * 
+     * This is so that there aren't too many concurrent API requests that could
+     * immediatelly use up all the ratelimit tokens (although this is quite
+     * unlikely with the number of usual requests anyway).
+     */
+    private final Semaphore activeRequests = new Semaphore(10);
     
     public QueuedApi() {
+        ExecutorService executor = Executors.newCachedThreadPool();
         queue = new PriorityBlockingQueue<>();
         
         Thread thread = new Thread(new Runnable() {
-
+            
             @Override
             public void run() {
                 while (true) {
                     try {
-                        if (ratelimitRemaining != -1 && ratelimitRemaining < 20) {
+                        if (ratelimitRemaining != -1 && ratelimitRemaining < 60) {
                             LOGGER.info("Waiting..");
                             Thread.sleep(10*1000);
                         }
+                        activeRequests.acquire();
+                        //System.out.println("Waiting for entry.. Permits: "+activeRequests.availablePermits());
                         Entry entry = queue.take();
-                        entry.request.setResultListener((result, responseCode, ratelimitRemaining) -> {
+                        //System.out.println("Entry taken: "+entry.request+" Permits: "+activeRequests.availablePermits());
+                        entry.request.setResultListener((result, responseCode, errorResult, ratelimitRemaining) -> {
+                            /**
+                             * Executed in an executor thread.
+                             */
                             // Get some data from the response and forward to external listener
                             QueuedApi.this.ratelimitRemaining = ratelimitRemaining;
-                            entry.listener.result(result, responseCode);
+                            activeRequests.release();
+                            if (Debugging.isEnabled("requestresponse")) {
+                                if (result != null) {
+                                    LOGGER.info(result);
+                                }
+                                if (errorResult != null) {
+                                    LOGGER.info("E:"+errorResult);
+                                }
+                            }
+                            // This may run a while (e.g. loading images etc.)
+                            entry.listener.result(new ResultListener.Result(result, responseCode, errorResult));
                             removePending(entry);
+                            //System.out.println("Entry done: "+entry.request+" Permits: "+activeRequests.availablePermits());
                         });
-                        entry.request.run();
+                        executor.execute(entry.request);
+                        
                     } catch (InterruptedException ex) {
                         // To stop the thread (currently not used)
                         LOGGER.warning("QueuedApi Thread interrupted");
@@ -63,7 +95,7 @@ public class QueuedApi {
                     }
                 }
             }
-        });
+        }, "QueuedApi");
         thread.start();
     }
     
@@ -117,7 +149,7 @@ public class QueuedApi {
         if (checkPending(entry)) {
             queue.add(entry);
         } else {
-            System.out.println("Duped");
+            System.out.println("Duped "+request);
         }
     }
     
@@ -142,8 +174,8 @@ public class QueuedApi {
         ResultListener listener = new ResultListener() {
 
             @Override
-            public void result(String result, int responseCode) {
-                System.out.println("Result: "+responseCode+" "+result);
+            public void result(Result r) {
+                System.out.println("Result: "+r.responseCode+" "+r.text);
             }
         };
 //        api.add("https://api.twitch.tv/helix/streams", null, null, listener);

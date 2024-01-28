@@ -4,6 +4,7 @@ package chatty.gui.components.admin;
 import chatty.gui.GuiUtil;
 import chatty.gui.components.menus.ContextMenu;
 import chatty.lang.Language;
+import chatty.util.api.StreamCategory;
 import java.awt.Dialog;
 import java.awt.Dimension;
 import java.awt.GridBagConstraints;
@@ -34,7 +35,7 @@ import javax.swing.event.ListSelectionListener;
 public class StatusHistoryDialog extends JDialog {
     
     private enum CloseAction {
-        CANCEL, USE_ALL, USE_TITLE, USE_GAME, USE_TAGS, USE_GAME_TAGS
+        CANCEL, USE_ALL, USE_TITLE, USE_GAME, USE_TAGS, USE_GAME_TAGS, USE_LABELS
     }
     
     private static final String INFO_TEXT = "<html><body style='width: 240px;text-align:center;'>"
@@ -49,17 +50,14 @@ public class StatusHistoryDialog extends JDialog {
     private final JCheckBox filterCurrentGame = new JCheckBox(Language.getString("admin.presets.setting.currentGame"));
     private final JCheckBox filterFavorites = new JCheckBox(Language.getString("admin.presets.setting.favorites"));
     
-    private String currentGame;
+    private StreamCategory currentGame;
     private CloseAction closeAction;
-    
-    private final Dialog parentComponent;
     
     public StatusHistoryDialog(Dialog parent, StatusHistory history) {
         super(parent);
         setTitle("Status History");
         setModal(true);
         setLayout(new GridBagLayout());
-        parentComponent = parent;
         
         table = new StatusHistoryTable(new TableContextMenu());
         table.getSelectionModel().addListSelectionListener(new ListSelectionListener() {
@@ -144,7 +142,7 @@ public class StatusHistoryDialog extends JDialog {
         
         pack();
         setMinimumSize(new Dimension(getPreferredSize().width, 200));
-        setSize(new Dimension(740,400));
+        setSize(new Dimension(870,400));
         
         GuiUtil.installEscapeCloseOperation(this);
     }
@@ -190,28 +188,32 @@ public class StatusHistoryDialog extends JDialog {
      * for values that should not be used) or {@code null} if none was selected
      * or the dialog was cancelled.
      */
-    public StatusHistoryEntry showDialog(String currentGame) {
+    public StatusHistoryEntry showDialog(StreamCategory currentGame) {
         this.currentGame = currentGame;
         table.requestFocusInWindow();
         setTitle(Language.getString("admin.presets.title", currentGame));
         updateFilter();
-        setLocationRelativeTo(parentComponent);
         table.setData(history.getEntries());
         closeAction = CloseAction.CANCEL;
         setVisible(true);
         // The dialog is modal
         StatusHistoryEntry selected = table.getSelectedEntry();
         if (selected != null) {
-            if (closeAction == CloseAction.USE_TITLE) {
-                return new StatusHistoryEntry(selected.title, null, null, -1, -1, false);
-            } else if (closeAction == CloseAction.USE_GAME) {
-                return new StatusHistoryEntry(null, selected.game, null, -1, -1, false);
-            } else if (closeAction == CloseAction.USE_TAGS) {
-                return new StatusHistoryEntry(null, null, selected.tags, -1, -1, false);
-            } else if (closeAction == CloseAction.USE_GAME_TAGS) {
-                return new StatusHistoryEntry(null, selected.game, selected.tags, -1, -1, false);
-            } else if (closeAction == CloseAction.USE_ALL) {
-                return selected;
+            if (null != closeAction) switch (closeAction) {
+                case USE_TITLE:
+                    return new StatusHistoryEntry(selected.title, null, null, null, -1, -1, false);
+                case USE_GAME:
+                    return new StatusHistoryEntry(null, selected.game, null, null, -1, -1, false);
+                case USE_TAGS:
+                    return new StatusHistoryEntry(null, null, selected.tags, null, -1, -1, false);
+                case USE_GAME_TAGS:
+                    return new StatusHistoryEntry(null, selected.game, selected.tags, null, -1, -1, false);
+                case USE_LABELS:
+                    return new StatusHistoryEntry(null, null, null, selected.labels, -1, -1, false);
+                case USE_ALL:
+                    return selected;
+                default:
+                    break;
             }
         }
         return null;
@@ -253,7 +255,7 @@ public class StatusHistoryDialog extends JDialog {
      * selected.
      */
     private void updateFilter() {
-        String game = null;
+        StreamCategory game = null;
         boolean favorites = filterFavorites.isSelected();
         if (filterCurrentGame.isSelected()) {
             game = currentGame;
@@ -316,6 +318,11 @@ public class StatusHistoryDialog extends JDialog {
         setVisible(false);
     }
     
+    private void useLabels() {
+        closeAction = CloseAction.USE_LABELS;
+        setVisible(false);
+    }
+    
     /**
      * Action listener for normal buttons.
      */
@@ -359,26 +366,40 @@ public class StatusHistoryDialog extends JDialog {
             addItem("useTitle", Language.getString("admin.presets.cm.useTitleOnly"));
             addItem("useGame", Language.getString("admin.presets.cm.useGameOnly"));
             addItem("useTags", Language.getString("admin.presets.cm.useTagsOnly"));
+            addItem("useLabels", Language.getString("admin.presets.cm.useLabelsOnly"));
             addSeparator();
             addItem("useGameTags", Language.getString("admin.presets.cm.useGameTagsOnly"));
         }
 
         @Override
         public void actionPerformed(ActionEvent e) {
-            if (e.getActionCommand().equals("remove")) {
-                removeSelected();
-            } else if (e.getActionCommand().equals("toggleFavorite")) {
-                toggleFavoriteOnSelected();
-            } else if (e.getActionCommand().equals("useAll")) {
-                useStatus();
-            } else if (e.getActionCommand().equals("useTitle")) {
-                useTitle();
-            } else if (e.getActionCommand().equals("useGameTags")) {
-                useGameAndTags();
-            } else if (e.getActionCommand().equals("useGame")) {
-                useGame();
-            } else if (e.getActionCommand().equals("useTags")) {
-                useTags();
+            switch (e.getActionCommand()) {
+                case "remove":
+                    removeSelected();
+                    break;
+                case "toggleFavorite":
+                    toggleFavoriteOnSelected();
+                    break;
+                case "useAll":
+                    useStatus();
+                    break;
+                case "useTitle":
+                    useTitle();
+                    break;
+                case "useGameTags":
+                    useGameAndTags();
+                    break;
+                case "useGame":
+                    useGame();
+                    break;
+                case "useTags":
+                    useTags();
+                    break;
+                case "useLabels":
+                    useLabels();
+                    break;
+                default:
+                    break;
             }
         }
         

@@ -2,6 +2,9 @@
 package chatty.gui.components.settings;
 
 import chatty.Chatty;
+import chatty.Chatty.PathType;
+import chatty.gui.components.LinkLabel;
+import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import static java.awt.GridBagConstraints.WEST;
 import javax.swing.JCheckBox;
@@ -43,6 +46,7 @@ public class OtherSettings extends SettingsPanel {
         JPanel graphics = addTitledPanel("Graphic Settings", 0);
         JPanel updates = addTitledPanel("Updates", 1);
         JPanel other = addTitledPanel("Other", 2);
+        JPanel paths = addTitledPanel("Paths", 3);
 
         //------------------
         // Graphics settings
@@ -60,6 +64,9 @@ public class OtherSettings extends SettingsPanel {
                 "Disable DirectDraw",
                 ""),
                 d.makeGbc(1, 1, 1, 1));
+        
+        SettingsUtil.addLabeledComponent(graphics, "uiScale", 0, 2, 1, GridBagConstraints.EAST,
+                d.addComboLongSetting("uiScale", 0, 100, 125, 150, 175, 200));
         
         //--------
         // Updates
@@ -110,12 +117,6 @@ public class OtherSettings extends SettingsPanel {
                 "statusWriter", 20, true, "Write Stream Status:", true, INFO_WRITER),
                 d.makeGbc(2, 6, 1, 1));
         
-        other.add(d.addSimpleBooleanSetting(
-                "autoUnhost",
-                "Auto-Unhost when your stream goes live",
-                "Automatically sends the /unhost command in your channel if your stream went live in the last 15 minutes"),
-                d.makeGbc(0, 7, 3, 1, GridBagConstraints.WEST));
-        
         SettingsUtil.addLabeledComponent(other, "titleAddition", 0, 8, 2, WEST,
                 d.addSimpleStringSetting("titleAddition", 10, true));
         
@@ -124,6 +125,40 @@ public class OtherSettings extends SettingsPanel {
                 "Save Addressbook immediately after changing entries",
                 "Save immediately after updating addressbook (including changes via commands)"),
                 d.makeGbc(0, 9, 3, 1, GridBagConstraints.WEST));
+        
+        JPanel pronouns = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+        JCheckBox pronouns1 = d.addSimpleBooleanSetting(
+                "pronouns",
+                "Display pronouns in User Dialog",
+                "Click on a user in chat to open User Dialog, the pronoun (if available) will be shown in the title next to the username");
+        pronouns.add(pronouns1);
+        pronouns.add(new LinkLabel("(based on [url:http://pronouns.alejo.io pronouns.alejo.io])", d.getLinkLabelListener()));
+        other.add(pronouns,
+                SettingsDialog.makeGbc(0, 10, 3, 1, GridBagConstraints.WEST));
+        
+        JCheckBox pronouns2 = d.addSimpleBooleanSetting(
+                "pronounsChat",
+                "Display pronouns in chat (may not immediately show for all users)",
+                "Will work best in chats with a small amount of users. May not show up on the first message of a user.");
+        other.add(pronouns2,
+                SettingsDialog.makeGbcSub(0, 11, 3, 1, GridBagConstraints.WEST));
+        
+        SettingsUtil.addSubsettings(pronouns1, pronouns2);
+        
+        //--------------------------
+        // Paths
+        //--------------------------
+        PathSetting cachePath = new PathSetting(d, Chatty.getDefaultPath(PathType.CACHE).toString());
+        d.addStringSetting("cachePath", cachePath);
+        SettingsUtil.addLabeledComponent(paths, "cachePath", 0, 0, 1, GridBagConstraints.NORTHEAST, cachePath, true);
+        
+        PathSetting imgPath = new PathSetting(d, Chatty.getDefaultPath(PathType.IMAGE).toString());
+        d.addStringSetting("imgPath", imgPath);
+        SettingsUtil.addLabeledComponent(paths, "imgPath", 0, 1, 1, GridBagConstraints.NORTHEAST, imgPath, true);
+        
+        PathSetting exportPath = new PathSetting(d, Chatty.getDefaultPath(PathType.EXPORT).toString());
+        d.addStringSetting("exportPath", exportPath);
+        SettingsUtil.addLabeledComponent(paths, "exportPath", 0, 2, 1, GridBagConstraints.NORTHEAST, exportPath, true);
     }
     
 }

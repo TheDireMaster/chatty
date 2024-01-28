@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -54,8 +55,11 @@ public class Manager {
                 
                 @Override
                 public void handleReceived(int id, String received) {
-                    listener.info(String.format("[%d]--> %s",
+                    listener.info(String.format(Locale.ROOT, "[%d(%d)/%d(%d)]--> %s",
                             id,
+                            c.getNumTopics(id),
+                            c.getNumConnections(),
+                            c.getNumTopics(),
                             StringUtil.trim(received)));
                     Message message = Message.fromJson(received, userIds);
                     if (message != null) {
@@ -76,8 +80,11 @@ public class Manager {
                 
                 @Override
                 public void handleSent(int id, String sent) {
-                    listener.info(String.format("[%d]<-- %s",
+                    listener.info(String.format(Locale.ROOT, "[%d(%d)/%d(%d)]<-- %s",
                             id,
+                            c.getNumTopics(id),
+                            c.getNumConnections(),
+                            c.getNumTopics(),
                             Helper.removeToken(token, sent)));
                 }
                 
@@ -96,6 +103,15 @@ public class Manager {
             LOGGER.warning("[PubSub] Invalid server: "+server);
             return null;
         }
+    }
+    
+    /**
+     * Only for testing. May cause issues.
+     * 
+     * @param input 
+     */
+    public void simulate(String input) {
+        c.simulate(input);
     }
     
     
@@ -118,6 +134,16 @@ public class Manager {
     }
     
     /**
+     * Only changes token. Updating username may be problematic since the user
+     * id may be in the topics.
+     * 
+     * @param token 
+     */
+    public void updateToken(String token) {
+        c.updateToken(token);
+    }
+    
+    /**
      * Start receiving the modlog for the given channel (username). The token is
      * requires to authenticate.
      * 
@@ -127,6 +153,8 @@ public class Manager {
     public void listenModLog(String username, String token) {
         this.token = token;
         addTopic(new ModLog(username));
+        addTopic(new AutoMod(username));
+        addTopic(new LowTrustUsers(username));
     }
     
     /**
@@ -136,6 +164,17 @@ public class Manager {
      */
     public void unlistenModLog(String username) {
         removeTopic(new ModLog(username));
+        removeTopic(new AutoMod(username));
+        removeTopic(new LowTrustUsers(username));
+    }
+    
+    public void listenUserModeration(String username, String token) {
+        this.token = token;
+        addTopic(new UserModeration(username));
+    }
+    
+    public void unlistenUserModeration(String username) {
+        removeTopic(new UserModeration(username));
     }
     
     public void listenPoints(String username, String token) {
@@ -345,7 +384,7 @@ public class Manager {
             if (getClass() != obj.getClass()) {
                 return false;
             }
-            final ModLog other = (ModLog) obj;
+            final StreamTopic other = (StreamTopic) obj;
             if (!Objects.equals(this.stream, other.stream)) {
                 return false;
             }
@@ -376,6 +415,40 @@ public class Manager {
         
     }
     
+    private class AutoMod extends StreamTopic {
+
+        AutoMod(String stream) {
+            super(stream);
+        }
+        
+        @Override
+        public String make() {
+            String userId = getUserId(stream);
+            if (userId != null && localUserId != null) {
+                return "automod-queue."+localUserId+"."+userId;
+            }
+            return null;
+        }
+        
+    }
+    
+    private class UserModeration extends StreamTopic {
+
+        UserModeration(String stream) {
+            super(stream);
+        }
+        
+        @Override
+        public String make() {
+            String userId = getUserId(stream);
+            if (userId != null && localUserId != null) {
+                return "user-moderation-notifications."+localUserId+"."+userId;
+            }
+            return null;
+        }
+        
+    }
+    
     private class Points extends StreamTopic {
 
         Points(String stream) {
@@ -386,11 +459,27 @@ public class Manager {
         public String make() {
             String userId = getUserId(stream);
             if (userId != null) {
-                return "channel-points-channel-v1."+userId;
+                return "community-points-channel-v1."+userId;
             }
             return null;
         }
 
+    }
+
+    private class LowTrustUsers extends StreamTopic {
+
+        LowTrustUsers(String stream) {
+            super(stream);
+        }
+
+        @Override
+        public String make() {
+            String userId = getUserId(stream);
+            if (userId != null && localUserId != null) {
+                return "low-trust-users." + localUserId + "." + userId;
+            }
+            return null;
+        }
     }
     
 }

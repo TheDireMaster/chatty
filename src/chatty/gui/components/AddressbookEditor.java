@@ -35,7 +35,7 @@ public class AddressbookEditor extends TableEditor<AddressbookEntry> {
         super(SORTING_MODE_SORTED, true);
         setModel(data);
         setTableEditorListener(listener);
-        setItemEditor(new MyEditor(parent));
+        setItemEditor(() -> new MyEditor(parent));
         //this.setItemEditor(null);
     }
     
@@ -115,7 +115,7 @@ public class AddressbookEditor extends TableEditor<AddressbookEntry> {
             categories.getDocument().addDocumentListener(documentListener);
             
             // Prevents any whitespace from being entered in the name field
-            ((AbstractDocument)name.getDocument()).setDocumentFilter(new RegexDocumentFilter("\\s+"));
+            ((AbstractDocument)name.getDocument()).setDocumentFilter(new RegexDocumentFilter("\\s+", this));
             
             // Layout
             setLayout(new GridBagLayout());

@@ -54,11 +54,14 @@ public class WindowSettings extends SettingsPanel {
         minimizing.add(d.addSimpleBooleanSetting("trayIconAlways"),
                 d.makeGbc(2, 1, 1, 1, GridBagConstraints.WEST));
         
+        minimizing.add(d.addSimpleBooleanSetting("hidePopoutsIfTray"),
+                d.makeGbcSub(0, 2, 3, 1, GridBagConstraints.WEST));
+        
         minimizing.add(d.addSimpleBooleanSetting("singleClickTrayOpen"),
-                d.makeGbc(0, 2, 3, 1, GridBagConstraints.WEST));
+                d.makeGbcSub(0, 3, 3, 1, GridBagConstraints.WEST));
         
         minimizing.add(d.addSimpleBooleanSetting("hideStreamsOnMinimize"),
-                d.makeGbc(0, 3, 3, 1, GridBagConstraints.WEST));
+                d.makeGbc(0, 4, 3, 1, GridBagConstraints.WEST));
         
         //-------
         // Other
@@ -92,14 +95,7 @@ public class WindowSettings extends SettingsPanel {
         // Popout
         //--------
         JPanel popout = addTitledPanel("Popout", 3);
-        
-        popout.add(d.addSimpleBooleanSetting("popoutSaveAttributes", "Restore location/size",
-                "Save and restore the location and size of popout dialogs during the same session"),
-                d.makeGbc(0,0,1,1));
-        popout.add(d.addSimpleBooleanSetting("popoutCloseLastChannel", "Close popout when only channel",
-                "Automatically close a popout if the last channel in the main window is closed"),
-                d.makeGbc(1, 0, 1, 1));
-        
+        popout.add(new JLabel("Moved to 'Tabs'"));
     }
     
 }

@@ -7,6 +7,7 @@ Twitch specific features.
 * Website: https://chatty.github.io
 * E-Mail: chattyclient@gmail.com
 * Twitter: @ChattyClient (https://twitter.com/ChattyClient)
+* Mastodon: https://mstdn.social/@chattyclient
 * YouTube: https://www.youtube.com/user/chattyclient
 * Discord: https://discord.gg/WTuqGeJ
 
@@ -32,7 +33,7 @@ to whatever license terms it is under (like retaining copyright notices) and to
 detail that in the Pull Request.
 
 Obviously, I won't be able to accept all contributions, for example I may
-already be working on something similiar. If you plan to put more than a little
+already be working on something similar. If you plan to put more than a little
 effort into a Pull Request, consider asking first if what you're doing has a
 chance of being added.
 
@@ -42,7 +43,7 @@ License Information
 Chatty, as a whole, is released under the GPLv3 or later (see included
 `LICENSE` file).
 
-    Copyright (C) 2017-2020  tduva and contributors
+    Copyright (C) 2017-2023  tduva and contributors
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -102,6 +103,11 @@ External Libraries
   * License: GPLv2 or later (see <https://www.gnu.org/licenses/gpl-2.0.txt>)
   * Based on v1.6.12 with some modifications by tduva
 
+* FlatLaf by FormDev:
+  * Website: https://www.formdev.com/flatlaf/
+  * License: "Apache License 2.0"
+    (see <https://github.com/JFormDesigner/FlatLaf/blob/main/LICENSE>)
+
 * Java-Websocket:
   * Files under `assets/lib/`: `JavaWebsocket-*.jar`
   * Website: <https://github.com/TooTallNate/Java-WebSocket>
@@ -109,12 +115,26 @@ External Libraries
 	(see <https://github.com/TooTallNate/Java-WebSocket/blob/master/LICENSE>)
   * Requires SLF4J (http://www.slf4j.org/, MIT, `slf4j-*.jar`)
 
-* Txtmark
+* Txtmark:
   * Files under `assets/lib/`: `txtmark-0.13.jar`, `txtmark-txtmark-0.13.zip`
   * Website: <https://github.com/rjeschke/txtmark>
   * License: "Apache License 2.0"
 	(for the license text see the APACHE_LICENSE file
 	or <http://www.apache.org/licenses/LICENSE-2.0>).
+
+* Apache HttpComponents Client:
+  * Files under `assets/lib/`: `httpclient*.jar`, `httpcore*.jar`, `commons-codec*.jar`
+  * Website: <https://hc.apache.org/>
+  * License: "Apache License 2.0"
+    (for the license text see the APACHE_LICENSE file
+	or <http://www.apache.org/licenses/LICENSE-2.0>).
+
+* WebPDecoderJN:
+  * Files under `assets/lib/`: `WebPDecoderJN-*.jar`
+  * Website: <https://github.com/tduva/WebPDecoderJN>
+  * License: "3-Clause BSD"
+    (see <https://github.com/tduva/WebPDecoderJN/blob/main/COPYING>)
+  * Requires JNA
 
 * Additional external/modified libraries integrated under `src/chatty/` have license/source
   information in the file header
@@ -131,12 +151,12 @@ Images / Other
 
 * Misc Icons from the Tango Icon Theme:
   * Files (in various folders): `list-add.png, list-remove.png, view-refresh.png,
-		help-browser.png, preferences-system.png,
+		help-browser.png, preferences-system.png, search.png,
 		dialog-warning.png, go-down.png, go-up.png, go-next.png,
 		go-previous.png, go-home.png, go-web.png,
 		image-icon.png, commandline.png, edit-copy.png, sort.png,
 		edit-all.png (edited), reply.png (edited)`
-  * Source: <http://tango.freedesktop.org>/Tango_Icon_Library
+  * Source: <http://tango.freedesktop.org/Tango_Icon_Library>
   * License: Released into the Public Domain
 
 * Misc Icons from NUVOLA ICON THEME for KDE 3.x
@@ -150,9 +170,15 @@ Images / Other
 
 * Robot Icon by Yusuke Kamiyamane:
   * File (in various folders): `icon_bot.png`
-  * Source: https://www.iconfinder.com/icons/46205/robot_icon
+  * Source: <https://www.iconfinder.com/icons/46205/robot_icon>
   * License: CC-BY 3.0
-	(http://creativecommons.org/licenses/by/3.0/)
+	(<http://creativecommons.org/licenses/by/3.0/>)
+
+* Announcement Icon Material Design (slightly modified):
+  * Files: `announcement*.png`
+  * Source: <https://materialdesignicons.com/icon/bullhorn>
+  * License: Apache 2.0
+    (<https://www.apache.org/licenses/LICENSE-2.0>)
 
 * Twitter Emoji Images:
   * Files: `gui/emoji/twemoji/*`
@@ -177,6 +203,11 @@ Images / Other
   * Source: https://github.com/joypixels/emojione/blob/master/emoji.json
   * License: MIT
 	(<https://opensource.org/licenses/MIT>)
+  * Now outdated, seems to be no longer updated
+
+* Emoji Metadata supplemented by:
+  * Source: <https://unicode.org/Public/emoji/14.0/emoji-test.txt>
+  * License: <https://www.unicode.org/license.txt>
 
 * Example Sounds by tduva:
   * Files: `assets/sounds/*`
@@ -191,29 +222,34 @@ The project is compiled using Gradle. Once you've checked it out, you can run
 `gradlew build` to compile and run the tests, and `gradlew release` to package
 the release artifacts.
 
-If you have Hotkey Support enabled (Windows only), you need to include the
-JIntellitype32.dll or the JIntellitype64.dll for the 32/64bit versions of Java
-respectively (but always renamed to JIntellitype.dll). If you use the release
-task mentioned above, several different zip versions are created for this.
+If you modified Chatty you should set your own client id in `Chatty.java`. You
+may also want to disable the Version Checker.
 
-In Chatty.java you should set your own client id which you get from Twitch. You
-may also want to disable the Version Checker depending on how you will distribute
-the compiled program. See the comments in Chatty.java for more information.
+Main release tasks
+------------------
 
-Windows Standalone Bundle
--------------------------
+* `release` - Just the regular JAR version Zip
+* `releaseWindows` - Regular and Windows Standalone Zip
+* `releaseWinSetups` - Everything, including Windows Standalone and Windows setups
 
-You can create a standalone Windows version (including a JRE) using the
-javapackager program included in the JDK. Use the `releaseWindows` task to
-build both the regular zip files and the standalone version, or the
-`windowsZip` task to just build the standalone version.
+Build parameters
+----------------
 
-You must specify the path to the javapackager program like this:
+* Windows Standalone (one of these required for the Windows Standalone tasks)
+  * `javapackagerPath` - Path to the `javapackager.exe` in the Java 8 JDK
+    * `jrePath` - Adds `-Bruntime=` option for javapackager (optional, will use
+      default JRE otherwise)
+  * `jpackagePath` - Path to the `jpackage.exe` in the Java 14+ JDK (if you
+    specify this one, it will use jpackage instead of javapackager)
+  * `mtPath` - Path to Microsoft's `mt.exe` (see e.g.
+    <https://stackoverflow.com/questions/54462568/how-to-install-just-mt-exe>),
+    used to add `assets-bundle/Chatty.exe.manifest` to the `Chatty.exe`/
+    `ChattyPortable.exe` (optional)
+* `innosetupPath` - Path to InnoSetup's `iscc.exe` (required for the Windows
+  installer tasks)
+
+These build parameters must be specified like this:
 `gradlew windowsZip -PjavapackagerPath="<path_to>/javapackager.exe"`
 
-You may also specify the path to the JRE to bundle using the `-PjrePath`
-parameter, otherwise it will use the default JRE of the system.
-
-Currently the build includes the JIntellitype32.dll, so you may have to
-exchange that file if you bundle a 64bit version of Java.
-
+Full example:
+`gradlew -Dorg.gradle.java.home="C:/Program Files (x86)/Java/jdk1.8.0_201" releaseWinSetups --console=verbose -PjavapackagerPath="C:/Program Files (x86)/Java/jdk1.8.0_201/bin/javapackager.exe" -PjrePath="C:\Program Files (x86)\Java\jre1.8.0_201" -PinnosetupPath="C:\Program Files (x86)\Inno Setup 6\ISCC.exe"`

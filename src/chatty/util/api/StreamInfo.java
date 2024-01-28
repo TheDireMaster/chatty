@@ -5,10 +5,10 @@ import chatty.Helper;
 import chatty.util.DateTime;
 import chatty.util.ElapsedTime;
 import chatty.util.StringUtil;
-import chatty.util.api.StreamTagManager.StreamTag;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.logging.Logger;
 
 /**
@@ -39,7 +39,7 @@ public class StreamInfo {
      */
     private String display_name;
     
-    private String logo;
+    private String thumbnailUrl;
     
     private String userId;
     
@@ -52,10 +52,11 @@ public class StreamInfo {
     private final ElapsedTime lastStatusChangeET = new ElapsedTime();
     private final ElapsedTime lastUpdateSuccededET = new ElapsedTime();
     private String status = null;
-    private String game = "";
+    private StreamCategory game = StreamCategory.EMPTY;
     private int viewers = 0;
-    private List<StreamTag> communities;
     private long startedAt = -1;
+    private long startedAtSameAfterOffline;
+    private final ElapsedTime lastFollowedUpdate = new ElapsedTime();
     private final ElapsedTime lastOnlineET = new ElapsedTime();
     private long prevLastOnlineAgoSecs;
     private long startedAtWithPicnic = -1;
@@ -72,6 +73,7 @@ public class StreamInfo {
      */
     private int followerCount = 0;
     private int subscriberCount = 0;
+    private boolean isOpen = false;
     
     /**
      * The time the stream was changed from online -> offline, so recheck if
@@ -157,14 +159,20 @@ public class StreamInfo {
      * @param viewers The current viewercount
      * @param startedAt The timestamp when the stream was started, -1 if not set
      */
-    public void setFollowed(String status, String game, int viewers,
+    public void setFollowed(String status, StreamCategory game, int viewers,
             long startedAt, StreamType streamType) {
         //System.out.println(status);
         followed = true;
         boolean saveToHistory = false;
-        if (hasExpired()) {
+        /**
+         * Save history when other API calls aren't made (channel not joined).
+         * Also when ignoring the other API due to rerun always save history
+         * from this one.
+         */
+        if (hasExpired() || startedAtSameAfterOffline > 0) {
             saveToHistory = true;
         }
+        lastFollowedUpdate.set();
         set(status, game, viewers, startedAt, streamType, saveToHistory);
     }
     
@@ -180,7 +188,7 @@ public class StreamInfo {
      * @param viewers The current viewercount
      * @param startedAt The timestamp when the stream was started, -1 if not set
      */
-    public void set(String status, String game, int viewers, long startedAt,
+    public void set(String status, StreamCategory game, int viewers, long startedAt,
             StreamType streamType) {
         set(status, game, viewers, startedAt, streamType, true);
     }
@@ -194,12 +202,12 @@ public class StreamInfo {
      * @param startedAt The timestamp when the stream was started, -1 if not set
      * @param saveToHistory Whether to save the data to history
      */
-    private void set(String status, String game, int viewers, long startedAt,
+    private void set(String status, StreamCategory game, int viewers, long startedAt,
             StreamType streamType, boolean saveToHistory) {
         UpdateResult result;
         synchronized(this) {
             this.status = StringUtil.trim(StringUtil.removeLinebreakCharacters(status));
-            this.game = StringUtil.trim(StringUtil.nullToString(game));
+            this.game = game;
             this.viewers = viewers;
             this.streamType = streamType;
 
@@ -225,6 +233,24 @@ public class StreamInfo {
                  */
                 this.startedAtWithPicnic = startedAt;
             }
+            /**
+             * If the stream start time is the same as before the stream was set
+             * to offline, it should mean that the streams API that reported it
+             * as offline is not correct (as in with reruns, that are only in
+             * the followed API).
+             */
+            if (!online && this.startedAt == startedAt) {
+                LOGGER.info("Same start time after offline: "+stream);
+                startedAtSameAfterOffline = startedAt;
+            }
+            /**
+             * If a new stream start time is received, then it might not be a
+             * rerun anymore, so reset the value to handle stuff normally.
+             */
+            if (startedAtSameAfterOffline > 0 && startedAtSameAfterOffline != startedAt) {
+                LOGGER.info("Changed start time after offline: "+stream);
+                startedAtSameAfterOffline = -1;
+            }
             this.startedAt = startedAt;
             this.prevLastOnlineAgoSecs = lastOnlineET.secondsElapsed();
             this.lastOnlineET.set();
@@ -233,8 +259,8 @@ public class StreamInfo {
             if (saveToHistory) {
                 addHistoryItem(System.currentTimeMillis(),
                         new StreamInfoHistoryItem(System.currentTimeMillis(),
-                                viewers, status, game,
-                                streamType, getCommunities(),
+                                viewers, status, game.name,
+                                streamType,
                                 getTimeStarted(), getTimeStartedWithPicnic()));
             }
             result = setUpdateSucceeded(true);
@@ -251,8 +277,42 @@ public class StreamInfo {
     public void setOffline() {
         UpdateResult result;
         synchronized (this) {
-            // If switching from online to offline
-            if (online && recheckOffline == -1) {
+            /**
+             * Since only the followed API has reruns ignore the streams API
+             * setting offline, since otherwise it would constantly switch
+             * between online (followed) and offline (streams).
+             * 
+             * Note that even if the setting offline is ignored, it still calls
+             * setUpdateSucceeded() and the streams requests continue as normal
+             * in case something changes (if e.g. the stream is unfollowed or
+             * actually goes offline). As long as the followed requests contain
+             * the stream that would also cause updates anyway though that would
+             * reset isRequested() and stuff.
+             */
+            if (startedAtSameAfterOffline > 0) {
+                /**
+                 * If the followed API didn't update recently (either because of
+                 * unfollowed or the stream actually going offline), go back to
+                 * normal for the next request.
+                 */
+                if (lastFollowedUpdate.isSetAndSecondsElapsed(600)) {
+                    LOGGER.info("Stopped ignoring offline (no followed updates)");
+                    startedAtSameAfterOffline = -1;
+                }
+                else {
+                    LOGGER.info("Ignored setting offline " + stream);
+                }
+            }
+            /**
+             * If switching from online to offline. Without recent updates (for
+             * example a followed stream went offline while not in the channel
+             * and isValidEnough() is false, then joining the offline channel)
+             * should not check this, since otherwise the previous online state
+             * will still appear (in the title etc.) until the recheck. Also,
+             * checking this if the stream hasn't been seen as online for hours
+             * doesn't make much sense anyway.
+             */
+            else if (online && recheckOffline == -1 && isValidEnough()) {
                 LOGGER.info("Waiting to recheck offline status for " + stream);
                 recheckOffline = System.currentTimeMillis();
             } else {
@@ -430,12 +490,14 @@ public class StreamInfo {
         return !hasDisplayName() || capitalizedName != null;
     }
     
-    public synchronized void setLogo(String logo) {
-        this.logo = logo;
+    public synchronized void setThumbnailUrl(String url) {
+        this.thumbnailUrl = url;
     }
     
-    public synchronized String getLogo() {
-        return logo;
+    public synchronized String getThumbnailUrl(int width, int height) {
+        return thumbnailUrl
+                .replace("{width}", String.valueOf(width))
+                .replace("{height}", String.valueOf(height));
     }
     
     public synchronized boolean setUserId(String userId) {
@@ -444,14 +506,6 @@ public class StreamInfo {
             return true;
         }
         return false;
-    }
-    
-    public synchronized void setCommunities(List<StreamTag> communities) {
-        this.communities = communities;
-    }
-    
-    public synchronized List<StreamTag> getCommunities() {
-        return communities;
     }
     
     public synchronized StreamType getStreamType() {
@@ -607,7 +661,7 @@ public class StreamInfo {
      * @return The name of the game or an empty String if no game is set
      */
     public synchronized String getGame() {
-        return game;
+        return game.name;
     }
     
     /**
@@ -691,6 +745,47 @@ public class StreamInfo {
         synchronized(history) {
             return new LinkedHashMap<>(history);
         }
+    }
+    
+    public void setHistory(LinkedHashMap<Long, StreamInfoHistoryItem> history) {
+        synchronized(history) {
+            this.history.clear();
+            this.history.putAll(history);
+        }
+    }
+    
+    public long getHistoryStreamStart(long time, boolean picnic) {
+        if (time == -1) {
+            if (isValid() && getOnline()) {
+                if (picnic) {
+                    return getTimeStartedWithPicnic();
+                }
+                return getTimeStarted();
+            }
+        }
+        synchronized(history) {
+            StreamInfoHistoryItem found = null;
+            for (StreamInfoHistoryItem item : history.values()) {
+                // First item after target time, so abort
+                if (item.getTime() > time) {
+                    break;
+                }
+                // Only items before or at target time are valid
+                if (item.getTime() <= time) {
+                    found = item;
+                }
+            }
+            if (found != null) {
+                if (found.isOnline()
+                        && time - found.getTime() < expiresAfter*1000*2) {
+                    if (picnic) {
+                        return found.getStreamStartTimeWithPicnic();
+                    }
+                    return found.getStreamStartTime();
+                }
+            }
+        }
+        return -1;
     }
     
     /**
@@ -867,4 +962,16 @@ public class StreamInfo {
     public synchronized int getSubscriberCount() {
         return subscriberCount;
     }
+    
+    public synchronized void setIsOpen(boolean isOpen) {
+        if (isOpen != this.isOpen) {
+            this.isOpen = isOpen;
+            streamInfoUpdated();
+        }
+    }
+    
+    public synchronized boolean isOpen() {
+        return isOpen;
+    }
+    
 }

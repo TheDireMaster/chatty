@@ -19,6 +19,7 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 import javax.swing.AbstractAction;
@@ -67,6 +68,7 @@ public class TableEditor<T> extends JPanel {
     private final JTable table;
     private ListTableModel<T> data;
     private ItemEditor<T> editor;
+    private Supplier<ItemEditor<T>> editorCreator;
     private TableRowSorter<ListTableModel<T>> sorter;
     private int sortingMode;
     private boolean currentlyFiltering;
@@ -278,6 +280,7 @@ public class TableEditor<T> extends JPanel {
         table.setModel(model);
         if (sortingMode == SORTING_MODE_SORTED) {
             sorter = new TableRowSorter<>(model);
+            sorter.setSortsOnUpdates(true);
             table.setRowSorter(sorter);
             sorter.toggleSortOrder(0);
         }
@@ -305,6 +308,10 @@ public class TableEditor<T> extends JPanel {
     protected final void setColumnWidth(int column, int size) {
         table.getColumnModel().getColumn(column).setPreferredWidth(size);
     }
+    
+    public TableRowSorter<ListTableModel<T>> getSorter() {
+        return sorter;
+    }
 
     /**
      * Set the data for this table.
@@ -314,6 +321,9 @@ public class TableEditor<T> extends JPanel {
     public void setData(List<T> data) {
         this.data.setData(data);
         updateButtons();
+        if (listener != null) {
+            listener.itemsSet();
+        }
     }
     
     /**
@@ -330,8 +340,15 @@ public class TableEditor<T> extends JPanel {
      * 
      * @param editor 
      */
-    public void setItemEditor(ItemEditor<T> editor) {
-        this.editor = editor;
+    public void setItemEditor(Supplier<ItemEditor<T>> editorCreator) {
+        this.editorCreator = editorCreator;
+    }
+    
+    private ItemEditor<T> getEditor() {
+        if (editor == null) {
+            editor = editorCreator.get();
+        }
+        return editor;
     }
     
     /**
@@ -547,7 +564,7 @@ public class TableEditor<T> extends JPanel {
      * @param preset The entry used to fill out some data in the edit dialog
      */
     protected void addItem(T preset) {
-        T result = editor.showEditor(preset, this, false, -1);
+        T result = getEditor().showEditor(preset, this, false, -1);
         // If the user didn't cancel the dialog, work with the result.
         if (result != null) {
             // Check if the resulting entry is already in the table.
@@ -616,7 +633,7 @@ public class TableEditor<T> extends JPanel {
         if (preset == null) {
             preset = data.get(modelIndex);
         }
-        T result = editor.showEditor(preset, this, true, table.getSelectedColumn());
+        T result = getEditor().showEditor(preset, this, true, table.getSelectedColumn());
         
         // Done editing in the dialog, work with the result if the user didn't
         // cancel the dialog.
@@ -640,6 +657,17 @@ public class TableEditor<T> extends JPanel {
             }
         }
         setRowSelected(indexToView(modelIndex));
+    }
+    
+    protected void selectItem(int modelIndex) {
+        setRowSelected(indexToView(modelIndex));
+    }
+    
+    protected void selectItem(T item) {
+        int index = data.indexOf(item);
+        if (index != -1) {
+            selectItem(index);
+        }
     }
     
     /**
@@ -836,6 +864,8 @@ public class TableEditor<T> extends JPanel {
      * informed about edits to the table. This is one of the main ways to
      * actually change the data that is edited in this table elsewhere.
      * 
+     * Changing the model directly (e.g. data.add()) may not trigger this.
+     * 
      * @param <T> The type of the items to be edited
      */
     public static interface TableEditorListener<T> {
@@ -867,6 +897,8 @@ public class TableEditor<T> extends JPanel {
         public void itemEdited(T oldItem, T newItem);
         
         public void allItemsChanged(List<T> newItems);
+        
+        public void itemsSet();
         
         /**
          * Called when the user requested the data in the table to be refreshed.

@@ -1,12 +1,14 @@
 
 package chatty.gui.components;
 
+import chatty.ChannelState;
 import chatty.Room;
 import chatty.gui.MouseClickedListener;
 import chatty.gui.StyleManager;
 import chatty.gui.StyleServer;
 import chatty.gui.MainGui;
 import chatty.User;
+import chatty.gui.Channels.DockChannelContainer;
 import chatty.gui.GuiUtil;
 import chatty.gui.components.menus.ContextMenuListener;
 import chatty.gui.components.menus.TextSelectionMenu;
@@ -14,22 +16,30 @@ import chatty.gui.components.textpane.ChannelTextPane;
 import chatty.gui.components.textpane.InfoMessage;
 import chatty.gui.components.textpane.Message;
 import chatty.util.StringUtil;
+import chatty.util.api.AccessChecker;
+import chatty.util.api.TokenInfo;
+import chatty.util.api.pubsub.LowTrustUserMessageData;
+import chatty.util.api.usericons.Usericon;
+import chatty.util.commands.CustomCommand;
+import chatty.util.commands.Parameters;
+import chatty.util.irc.MsgTags;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
+import java.awt.Point;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import java.awt.event.KeyEvent;
-import javax.swing.AbstractAction;
-import javax.swing.InputMap;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
+import javax.swing.BorderFactory;
+import javax.swing.JButton;
 import javax.swing.JPanel;
 import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
-import javax.swing.KeyStroke;
-import javax.swing.SwingUtilities;
+import javax.swing.Popup;
+import javax.swing.PopupFactory;
 import javax.swing.Timer;
-import javax.swing.event.DocumentEvent;
-import javax.swing.event.DocumentListener;
+import javax.swing.text.JTextComponent;
 
 /**
  * A single channel window, combining styled text pane, userlist and input box.
@@ -37,7 +47,7 @@ import javax.swing.event.DocumentListener;
  * @author tduva
  */
 public final class Channel extends JPanel {
-    
+
     public enum Type {
         NONE, CHANNEL, WHISPER, SPECIAL
     }
@@ -54,11 +64,17 @@ public final class Channel extends JPanel {
     private final MainGui main;
     private Type type;
     
+    private DockChannelContainer content;
+    
     private boolean userlistEnabled = true;
     private int previousUserlistWidth;
     private int userlistMinWidth;
 
     private Room room;
+    
+    private ModerationPanel modPanel;
+    private Popup modPanelPopup;
+    private final JButton modPanelButton;
 
     public Channel(final Room room, Type type, MainGui main, StyleManager styleManager,
             ContextMenuListener contextMenuListener) {
@@ -70,7 +86,7 @@ public final class Channel extends JPanel {
         setName(room.getDisplayName());
         
         // Text Pane
-        text = new ChannelTextPane(main,styleManager);
+        text = new ChannelTextPane(main, styleManager);
         text.setContextMenuListener(contextMenuListener);
         
         setTextPreferredSizeTemporarily();
@@ -80,18 +96,11 @@ public final class Channel extends JPanel {
         //System.out.println(west.getVerticalScrollBarPolicy());
         //System.out.println(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         west.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
-        
-        // PageUp/Down hotkeys / Scrolling
-        InputMap westScrollInputMap = west.getInputMap(WHEN_IN_FOCUSED_WINDOW);
-        westScrollInputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_PAGE_UP, 0), "pageUp");
-        west.getActionMap().put("pageUp", new ScrollAction("pageUp", west.getVerticalScrollBar()));
-        westScrollInputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_PAGE_DOWN, 0), "pageDown");
-        west.getActionMap().put("pageDown", new ScrollAction("pageDown", west.getVerticalScrollBar()));
         west.getVerticalScrollBar().setUnitIncrement(40);
 
         
         // User list
-        users = new UserList(contextMenuListener, main.getUserListener());
+        users = new UserList(contextMenuListener, main.getUserListener(), main.getSettings());
         updateUserlistSettings();
         userlist = new JScrollPane(users);
         
@@ -102,19 +111,135 @@ public final class Channel extends JPanel {
         mainPane.setDividerSize(DIVIDER_SIZE);
         
         // Text input
-        input = new ChannelEditBox(40);
+        input = new ChannelEditBox();
         input.addActionListener(main.getActionListener());
         input.setCompletionServer(new ChannelCompletion(this, main, input, users));
         input.setCompletionEnabled(main.getSettings().getBoolean("completionEnabled"));
-        // Remove PAGEUP/DOWN so it can scroll chat (as before JTextArea)
-        input.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_PAGE_UP, 0), "-");
-        input.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_PAGE_DOWN, 0), "-");
-        GuiUtil.installLengthLimitDocumentFilter(input, 500, false);
+        installLimits(input);
         TextSelectionMenu.install(input);
-
+        
+        JPanel inputPanel = new JPanel(new BorderLayout());
+        inputPanel.add(input, BorderLayout.CENTER);
+        
+        modPanelButton = new JButton("M");
+        modPanelButton.setToolTipText("Channel Modes");
+        modPanelButton.setVisible(false);
+        inputPanel.add(modPanelButton, BorderLayout.EAST);
+        modPanelButton.addActionListener(e -> {
+            openModPanel();
+        });
+        
         // Add components
         add(mainPane, BorderLayout.CENTER);
-        add(input, BorderLayout.SOUTH);
+        add(inputPanel, BorderLayout.SOUTH);
+    }
+    
+    public void updateModButton() {
+        boolean hasAccess = AccessChecker.instance().check(room.getChannel(), TokenInfo.Scope.MANAGE_CHAT, true, false);
+        modPanelButton.setVisible(hasAccess);
+        
+        // Not sure if this looks good
+//        Usericon icon = main.client.usericonManager.getIcon(Usericon.Type.TWITCH, "moderator", "1", main.client.getLocalUser(room.getChannel()), MsgTags.EMPTY);
+//        if (icon != null) {
+//            int height = input.getFontMetrics(input.getFont()).getHeight();
+//            modPanelButton.setIcon(icon.getIcon(2f, 2, height, (oldImage, newImage, sizeChanged) -> {
+//                     modPanelButton.repaint();
+//                 }).getImageIcon());
+//            modPanelButton.setText(null);
+//            modPanelButton.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
+//        }
+    }
+    
+    public void updateModPanel() {
+        if (modPanel != null) {
+            ChannelState state = main.getChannelState(room.getChannel());
+            modPanel.updateState(state);
+        }
+    }
+    
+    private void closeModPanel() {
+        if (modPanelPopup != null) {
+            modPanelPopup.hide();
+            modPanelPopup = null;
+        }
+    }
+    private void openModPanel() {
+        if (modPanelPopup != null) {
+            closeModPanel();
+            return;
+        }
+        if (modPanel == null) {
+            modPanel = new ModerationPanel(main, main.getSettings());
+            modPanel.setBorder(BorderFactory.createRaisedSoftBevelBorder());
+            modPanel.addCommandListener(s -> {
+                main.anonCustomCommand(room, CustomCommand.parse(s), Parameters.create(""));
+            });
+            
+            text.addFocusListener(new FocusAdapter() {
+
+                @Override
+                public void focusGained(FocusEvent e) {
+                    closeModPanel();
+                }
+
+            });
+
+            input.addFocusListener(new FocusAdapter() {
+
+                @Override
+                public void focusGained(FocusEvent e) {
+                    closeModPanel();
+                }
+
+            });
+        }
+        updateModPanel();
+        Point inputLocation = input.getLocationOnScreen();
+        Dimension panelSize = modPanel.getPreferredSize();
+        int buttonWidth = modPanelButton.getSize().width;
+        Popup popup = PopupFactory.getSharedInstance().getPopup(
+                input,
+                modPanel,
+                inputLocation.x + input.getWidth() - panelSize.width + buttonWidth,
+                inputLocation.y - panelSize.height);
+        popup.show();
+        modPanelPopup = popup;
+    }
+    
+    /**
+     * Create temporary input box for the $input() function.
+     * 
+     * @return 
+     */
+    public ChannelEditBox createInputBox() {
+        ChannelEditBox result = new ChannelEditBox();
+        result.setCompletionServer(new ChannelCompletion(this, main, result, users));
+        result.setCompletionEnabled(main.getSettings().getBoolean("completionEnabled"));
+        installLimits(result);
+        TextSelectionMenu.install(result);
+        return result;
+    }
+    
+    private static void installLimits(JTextComponent comp) {
+        GuiUtil.installLengthLimitDocumentFilter(comp, 500, false,
+                // Might not be all commands that can send messages, but should be fine
+                "^/(say|me|msg|msgreply|msgreplythread) ", 504,
+                "^/", 100*1000);
+    }
+    
+    public DockChannelContainer getDockContent() {
+        return content;
+    }
+    
+    public void setDockContent(DockChannelContainer content) {
+        this.content = content;
+        updateContentData();
+    }
+    
+    private void updateContentData() {
+        if (content != null) {
+            content.setTitle(getName());
+        }
     }
     
     public void init() {
@@ -122,25 +247,6 @@ public final class Channel extends JPanel {
         
         input.requestFocusInWindow();
         setStyles();
-        
-        input.getDocument().addDocumentListener(new DocumentListener() {
-
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                if (onceOffEditListener != null && room != Room.EMPTY) {
-                    onceOffEditListener.edited(room.getChannel());
-                    onceOffEditListener = null;
-                }
-            }
-
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-            }
-
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-            }
-        });
     }
     
     public boolean setRoom(Room room) {
@@ -148,6 +254,8 @@ public final class Channel extends JPanel {
             this.room = room;
             refreshBufferSize();
             setName(room.getDisplayName());
+            updateContentData();
+            getDockContent().setId(room.getChannel());
             return true;
         }
         return false;
@@ -252,13 +360,7 @@ public final class Channel extends JPanel {
 
     @Override
     public boolean requestFocusInWindow() {
-        // Invoke later, because otherwise it wouldn't get focus for some
-        // reason.
-        SwingUtilities.invokeLater(() -> {
-            input.requestFocusInWindow();
-        });
         return input.requestFocusInWindow();
-        
     }
     
     
@@ -291,7 +393,10 @@ public final class Channel extends JPanel {
     public void printMessage(Message message) {
         text.printMessage(message);
     }
-    
+
+    public void printLowTrustInfo(User user, LowTrustUserMessageData data) {
+        text.printLowTrustInfo(user, data);
+    }
     
     // Style
     
@@ -332,28 +437,24 @@ public final class Channel extends JPanel {
         input.insertAtCaret(text, withSpace);
     }
     
-    private static class ScrollAction extends AbstractAction {
-        
-        private final String action;
-        private final JScrollBar scrollbar;
-        
-        ScrollAction(String action, JScrollBar scrollbar) {
-            this.scrollbar = scrollbar;
-            this.action = action;
+    public void scroll(String action) {
+        scroll(west.getVerticalScrollBar(), action);
+    }
+    
+    public static void scroll(JScrollBar scrollbar, String action) {
+        int now = scrollbar.getValue();
+        int height = scrollbar.getVisibleAmount();
+        height = height - height / 10;
+        int newValue = 0;
+        switch (action) {
+            case "pageUp":
+                newValue = now - height;
+                break;
+            case "pageDown":
+                newValue = now + height;
+                break;
         }
-        
-        @Override
-        public void actionPerformed(ActionEvent e) {
-            int now = scrollbar.getValue();
-            int height = scrollbar.getVisibleAmount();
-            height = height - height / 10;
-            int newValue = 0;
-            switch (action) {
-                case "pageUp": newValue = now - height; break;
-                case "pageDown": newValue = now + height; break;
-            }
-            scrollbar.setValue(newValue);
-        }
+        scrollbar.setValue(newValue);
     }
     
     public final void setUserlistWidth(int width, int minWidth) {
@@ -382,10 +483,33 @@ public final class Channel extends JPanel {
     }
     
     /**
+     * Return 0 size, so resizing in a split pane works.
+     * 
+     * @return 
+     */
+    @Override
+    public Dimension getMinimumSize() {
+        return new Dimension(0, 0);
+    }
+    
+    /**
      * Toggle visibility for the text input box.
      */
     public final void toggleInput() {
         input.setVisible(!input.isVisible());
+        revalidate();
+    }
+    
+    private boolean inputPreviouslyShown = true;
+    
+    public final void hideInput() {
+        inputPreviouslyShown = input.isVisible();
+        input.setVisible(false);
+        revalidate();
+    }
+    
+    public final void restoreInput() {
+        input.setVisible(inputPreviouslyShown);
         revalidate();
     }
     
@@ -449,20 +573,9 @@ public final class Channel extends JPanel {
         return text.getSelectedUser();
     }
     
-        
     @Override
     public String toString() {
         return String.format("%s '%s'", type, room);
-    }
-    
-    private OnceOffEditListener onceOffEditListener;
-    
-    public void setOnceOffEditListener(OnceOffEditListener listener) {
-        onceOffEditListener = listener;
-    }
-    
-    public interface OnceOffEditListener {
-        public void edited(String channel);
     }
     
 }

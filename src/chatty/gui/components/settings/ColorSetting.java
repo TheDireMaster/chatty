@@ -15,6 +15,7 @@ import java.awt.event.MouseListener;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Supplier;
 import javax.swing.BorderFactory;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
@@ -56,15 +57,19 @@ public class ColorSetting extends JPanel implements StringSetting {
      * The base color as a string
      */
     private String baseColor;
+    
+    private boolean useBaseColor = true;
+    
     /**
      * Primary and secondary colors as Color objects.
      */
     private Color currentColor;
     private Color secondaryColor;
+    private String previewText;
     
     private final Set<ColorSettingListener> listeners = new HashSet<>();
     
-    private final ColorChooser colorChooser;
+    private ColorChooser colorChooser;
     private final JButton chooseColor = new JButton();
     
     /**
@@ -74,15 +79,15 @@ public class ColorSetting extends JPanel implements StringSetting {
      * @param baseColorSetting The name of the color setting for the background.
      * @param name The name of the color.
      * @param text A description or example of the text for this color.
-     * @param chooser ColorChooser to use to select a new color.
+     * @param chooserCreator
      */
     public ColorSetting(final int type, String baseColorSetting,
-            final String name, final String text, ColorChooser chooser) {
+            final String name, final String text, Supplier<ColorChooser> chooserCreator) {
         setLayout(new GridBagLayout());
         
         this.type = type;
         this.baseColorSetting = baseColorSetting;
-        this.colorChooser = chooser;
+        this.previewText = text;
         
         // Set text and size of preview
         if (!text.isEmpty()) {
@@ -97,7 +102,10 @@ public class ColorSetting extends JPanel implements StringSetting {
 
             @Override
             public void actionPerformed(ActionEvent e) {
-                String result = colorChooser.chooseColorString(type, currentColor, secondaryColor, name, text);
+                if (colorChooser == null) {
+                    colorChooser = chooserCreator.get();
+                }
+                String result = colorChooser.chooseColorString(type, currentColor, secondaryColor, name, previewText);
                 setSettingValue(result);
             }
         });
@@ -142,7 +150,12 @@ public class ColorSetting extends JPanel implements StringSetting {
     public void updated() {
         // Update Color objects based on current values
         currentColor = HtmlColors.decode(getSettingValue());
-        secondaryColor = HtmlColors.decode(baseColor);
+        if (useBaseColor) {
+            secondaryColor = HtmlColors.decode(baseColor);
+        }
+        else {
+            secondaryColor = null;
+        }
         
         // Choose the approriate background/foreground colors depending on type
         Color foregroundColor;
@@ -180,8 +193,24 @@ public class ColorSetting extends JPanel implements StringSetting {
         this.baseColorSetting = setting;
     }
     
+    public void setUseBaseColor(boolean use) {
+        this.useBaseColor = use;
+        updated();
+    }
+    
+    public void setPreviewText(String previewText) {
+        if (previewText == null) {
+            previewText = "";
+        }
+        preview.setText(" "+previewText);
+        this.previewText = previewText;
+    }
+    
     @Override
     public void setEnabled(boolean enabled) {
+        // Call so isEnabled() returns the correct value
+        super.setEnabled(enabled);
+        // Change state of children
         preview.setEnabled(enabled);
         textField.setEnabled(enabled);
         chooseColor.setEnabled(enabled);

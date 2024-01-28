@@ -2,8 +2,10 @@
 package chatty.gui;
 
 import chatty.Chatty;
+import chatty.gui.components.routing.RoutingTargetInfo;
 import chatty.lang.Language;
 import chatty.gui.components.settings.SettingsUtil;
+import chatty.util.dnd.DockLayout;
 import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.event.ActionEvent;
@@ -18,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.function.Consumer;
+import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -41,11 +44,13 @@ public class MainMenu extends JMenuBar {
     
     private final JMenu main = new JMenu(Language.getString("menubar.menu.main"));
     protected final JMenu view = new JMenu(Language.getString("menubar.menu.view"));
+    protected final JMenu customTabsMenu = new JMenu("Custom Tabs");
     protected final JMenu channels = new JMenu(Language.getString("menubar.menu.channels"));
     private final JMenu srl = new JMenu(Language.getString("menubar.menu.srl"));
     protected final JMenu srlStreams = new JMenu("Races with..");
     private final JMenu extra = new JMenu(Language.getString("menubar.menu.extra"));
     private final JMenu help = new JMenu(Language.getString("menubar.menu.help"));
+    protected final JMenu layoutsMenu = new JMenu("Layouts");
     
     private final JMenuItem highlights;
     private final JMenuItem ignored;
@@ -80,6 +85,8 @@ public class MainMenu extends JMenuBar {
         help.addActionListener(actionListener);
         
         view.addMenuListener((MenuListener)itemListener);
+        layoutsMenu.addMenuListener((MenuListener)itemListener);
+        customTabsMenu.addMenuListener((MenuListener)itemListener);
         
         main.setMnemonic(KeyEvent.VK_M);
         view.setMnemonic(KeyEvent.VK_V);
@@ -134,8 +141,12 @@ public class MainMenu extends JMenuBar {
         ignored = addItem(view,"dialog.ignoredMessages",IGNORED_LABEL);
         view.addSeparator();
         addItem(view, "dialog.eventLog");
+        addItem(view, "window.toggleUserlist");
         view.addSeparator();
         addItem(view, "dialog.search");
+        view.addSeparator();
+        view.add(layoutsMenu);
+        view.add(customTabsMenu);
         
         //----------
         // Channels
@@ -157,7 +168,7 @@ public class MainMenu extends JMenuBar {
         //-------
         // Extra
         //-------
-        addItem(extra,"livestreamer",Language.getString("menubar.dialog.livestreamer"), KeyEvent.VK_L);
+        addItem(extra,"dialog.livestreamer");
         addItem(extra,"dialog.toggleEmotes");
         extra.addSeparator();
         addItem(extra,"dialog.followers");
@@ -176,6 +187,9 @@ public class MainMenu extends JMenuBar {
         addItem(streamHighlights, "stream.addhighlight", "Add Stream Highlight");
         addItem(streamHighlights, "openStreamHighlights", "Open Stream Highlights");
         extra.add(streamHighlights);
+        
+        extra.addSeparator();
+        addItem(extra,"transparency","Transparency");
         
         extra.addSeparator();
         JMenu debugOptions = new JMenu("Options");
@@ -209,7 +223,7 @@ public class MainMenu extends JMenuBar {
         add(main);
         add(view);
         add(channels);
-        add(srl);
+//        add(srl);
         add(extra);
         add(help);
     }
@@ -387,6 +401,37 @@ public class MainMenu extends JMenuBar {
         }
     }
     
+    public void updateLayouts(Map<String, DockLayout> layouts) {
+        // Remove last session layout
+        layouts.remove("");
+        
+        layoutsMenu.removeAll();
+        if (!layouts.isEmpty()) {
+            for (Map.Entry<String, DockLayout> entry : layouts.entrySet()) {
+                JMenu submenu = new JMenu(entry.getKey());
+                addItem(submenu, "layouts.load."+entry.getKey(), "Load").setToolTipText("Load this layout (you'll still have the chance to cancel loading)");
+                submenu.addSeparator();
+                addItem(submenu, "layouts.remove."+entry.getKey(), "Remove");
+                addItem(submenu, "layouts.save."+entry.getKey(), "Overwrite").setToolTipText("");
+                layoutsMenu.add(submenu);
+            }
+            layoutsMenu.addSeparator();
+        }
+        addItem(layoutsMenu, "layouts.add", "Add");
+    }
+    
+    public void updateCustomTabs(List<RoutingTargetInfo> infos) {
+        customTabsMenu.removeAll();
+        for (RoutingTargetInfo info : infos) {
+            String label = info.name;
+            if (info.messages > -1) {
+                label = String.format("%s (%d)",
+                        info.name, info.messages);
+            }
+            addItem(customTabsMenu, "customTab."+info.name, label);
+        }
+    }
+    
     //==========================
     // Notifications
     //==========================
@@ -400,7 +445,7 @@ public class MainMenu extends JMenuBar {
     
     public void setSystemEventCount(int count) {
         if (count > 0) {
-            notifyIcons.addItem("chattyInfo", 0, String.valueOf(count), "warning.png", id -> {
+            notifyIcons.addItem("chattyInfo", 0, "Events: "+String.valueOf(count), "warning.png", id -> {
                 actionListener.actionPerformed(new ActionEvent(this, ActionEvent.ACTION_FIRST, "dialog.chattyInfo"));
             });
         }
@@ -408,23 +453,23 @@ public class MainMenu extends JMenuBar {
             notifyIcons.removeItem("chattyInfo");
         }
     }
-    
+
     private class NotifyIcons {
         
         /**
          * Associates an item id with a label.
          */
-        private final Map<String, JLabel> current = new HashMap<>();
+        private final Map<String, JMenu> current = new HashMap<>();
         
         /**
          * Stores the target position for an added label.
          */
-        private final Map<JLabel, Integer> targetPositions = new HashMap<>();
+        private final Map<JMenu, Integer> targetPositions = new HashMap<>();
         
         /**
          * Stores whether a label is currently flashing.
          */
-        private final Map<JLabel, Boolean> flashing = new HashMap<>();
+        private final Map<JMenu, Boolean> flashing = new HashMap<>();
         
         /**
          * For aligning to the right.
@@ -443,24 +488,25 @@ public class MainMenu extends JMenuBar {
          * @param consumer Called when a click on this item occurs
          */
         public void addItem(String id, int pos, String text, String imageFile, Consumer<String> consumer) {
-            JLabel label = current.get(id);
+            JMenu label = current.get(id);
             if (label == null) {
-                label = new JLabel();
-                int iconSize = getGraphics().getFontMetrics(label.getFont()).getHeight();
+                label = new JMenu();
+                int iconSize = label.getFontMetrics(label.getFont()).getHeight();
                 ImageIcon icon = GuiUtil.getScaledIcon(GuiUtil.getIcon(this, imageFile), iconSize, iconSize);
                 label.setIcon(icon);
                 label.setIconTextGap(0);
                 label.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
                 label.setBorder(BorderFactory.createEmptyBorder(0, 3, 0, 4));
                 label.setToolTipText(Language.getStringNull("menubar.notification."+id));
-                label.addMouseListener(new MouseAdapter() {
-
+                
+                JMenuItem item = new JMenuItem(new AbstractAction(Language.getString("menubar.notification.view")) {
                     @Override
-                    public void mouseClicked(MouseEvent e) {
+                    public void actionPerformed(ActionEvent e) {
                         consumer.accept(id);
                     }
-
                 });
+                
+                label.add(item);
                 if (current.isEmpty()) {
                     add(glue);
                 }
@@ -501,7 +547,7 @@ public class MainMenu extends JMenuBar {
          * 
          * @param label 
          */
-        private void flash(JLabel label) {
+        private void flash(JMenu label) {
             Icon icon = label.getIcon();
             if (icon != null && !flashing.containsKey(label)) {
                 flashing.put(label, Boolean.TRUE);
@@ -532,7 +578,7 @@ public class MainMenu extends JMenuBar {
          * @param id The item id
          */
         public void removeItem(String id) {
-            JLabel label = current.get(id);
+            JMenu label = current.get(id);
             if (label != null) {
                 remove(label);
                 current.remove(id);

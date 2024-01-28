@@ -18,6 +18,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -70,13 +71,15 @@ public class Addressbook {
         this.fileName = fileName;
         this.importFileName = importFilename;
         this.settings = settings;
-        settings.addSettingsListener(new SettingsListener() {
+        if (settings != null) {
+            settings.addSettingsListener(new SettingsListener() {
 
-            @Override
-            public void aboutToSaveSettings(Settings settings) {
-                saveToSettings();
-            }
-        });
+                @Override
+                public void aboutToSaveSettings(Settings settings) {
+                    saveToSettings();
+                }
+            });
+        }
     }
     
     /**
@@ -616,6 +619,16 @@ public class Addressbook {
         return false;
     }
     
+    public synchronized Set<String> getNamesByCategory(String category) {
+        Set<String> result = new HashSet<>();
+        for (AddressbookEntry entry : entries.values()) {
+            if (entry.hasCategory(category)) {
+                result.add(entry.getName());
+            }
+        }
+        return result;
+    }
+    
     /**
      * Returns all entries.
      * 
@@ -742,7 +755,7 @@ public class Addressbook {
                 }
             }
         }
-        LOGGER.info(String.format("Read %d addressbook entries from settings",
+        LOGGER.info(String.format(Locale.ROOT, "Read %d addressbook entries from settings",
                 entries.size()));
         scanCategories();
         return true;
@@ -849,7 +862,7 @@ public class Addressbook {
     }
     
     private void saveOnChange() {
-        if (settings.getBoolean("abSaveOnChange")) {
+        if (settings != null && settings.getBoolean("abSaveOnChange")) {
             saveToFile();
         }
     }

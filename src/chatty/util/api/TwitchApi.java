@@ -1,16 +1,19 @@
 
 package chatty.util.api;
 
-import chatty.Helper;
+import chatty.Room;
+import chatty.User;
 import chatty.util.CachedBulkManager;
 import chatty.util.StringUtil;
-import chatty.util.api.StreamTagManager.StreamTagsListener;
-import chatty.util.api.StreamTagManager.StreamTag;
-import chatty.util.api.StreamTagManager.StreamTagListener;
-import chatty.util.api.StreamTagManager.StreamTagPutListener;
+import chatty.util.api.BlockedTermsManager.BlockedTerm;
+import chatty.util.api.BlockedTermsManager.BlockedTerms;
 import chatty.util.api.UserIDs.UserIdResult;
 import java.util.*;
 import java.util.logging.Logger;
+import chatty.util.api.ResultManager.CategoryResult;
+import chatty.util.api.eventsub.EventSubAddResult;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 /**
  * Handles TwitchApi requests and responses.
@@ -40,19 +43,21 @@ public class TwitchApi {
     
     protected final StreamInfoManager streamInfoManager;
     protected final EmoticonManager2 emoticonManager2;
-    protected final CheerEmoticonManager cheersManager;
     protected final CheerEmoticonManager2 cheersManager2;
     protected final FollowerManager followerManager;
     protected final FollowerManager subscriberManager;
     protected final BadgeManager badgeManager;
     protected final UserIDs userIDs;
     protected final ChannelInfoManager channelInfoManager;
-    protected final StreamTagManager communitiesManager;
     protected final CachedBulkManager<Req, Boolean> m;
+    protected final ResultManager resultManager;
+    protected final UserInfoManager userInfoManager;
+    protected final BlockedTermsManager blockedTermsManager;
     
     private volatile Long tokenLastChecked = Long.valueOf(0);
     
     protected volatile String defaultToken;
+    protected volatile String localUserId;
 
     protected final Requests requests;
 
@@ -60,7 +65,6 @@ public class TwitchApi {
             StreamInfoListener streamInfoListener) {
         this.resultListener = apiResultListener;
         this.streamInfoManager = new StreamInfoManager(this, streamInfoListener);
-        cheersManager = new CheerEmoticonManager(apiResultListener);
         cheersManager2 = new CheerEmoticonManager2(this, resultListener);
         followerManager = new FollowerManager(Follower.Type.FOLLOWER, this, resultListener);
         subscriberManager = new FollowerManager(Follower.Type.SUBSCRIBER, this, resultListener);
@@ -68,8 +72,9 @@ public class TwitchApi {
         requests = new Requests(this, resultListener);
         channelInfoManager = new ChannelInfoManager(this, resultListener);
         userIDs = new UserIDs(this);
-        communitiesManager = new StreamTagManager();
+        userInfoManager = new UserInfoManager(this);
         emoticonManager2 = new EmoticonManager2(resultListener, requests);
+        blockedTermsManager = new BlockedTermsManager(requests);
         m = new CachedBulkManager<>(new CachedBulkManager.Requester<Req, Boolean>() {
 
             @Override
@@ -81,6 +86,7 @@ public class TwitchApi {
                 }
             }
         }, "[Api] ", CachedBulkManager.NONE);
+        resultManager = new ResultManager();
     }
     
     private static class Req {
@@ -91,6 +97,11 @@ public class TwitchApi {
         public Req(String key, Runnable request) {
             this.key = key;
             this.request = request;
+        }
+        
+        @Override
+        public String toString() {
+            return key;
         }
 
         @Override
@@ -117,21 +128,61 @@ public class TwitchApi {
         
     }
     
-    protected void setReceived(String key) {
-        m.setResult(new Req(key, null), Boolean.TRUE);
+    protected void setReceived(String requestId) {
+        m.setResult(new Req(requestId, null), Boolean.TRUE);
     }
     
-    protected void setError(String key) {
-        m.setError(new Req(key, null));
+    protected void setError(String requestId) {
+        m.setError(new Req(requestId, null));
     }
     
-    protected void setNotFound(String key) {
-        m.setNotFound(new Req(key, null));
+    protected void setNotFound(String requestId) {
+        m.setNotFound(new Req(requestId, null));
     }
     
     //=================
     // Chat / Emoticons
     //=================
+    
+    /**
+     * Request channel emotes if necessary.
+     * 
+     * @param stream The stream name (required)
+     * @param id The stream id (optional)
+     * @param refresh If true, request is done even if already requested before
+     */
+    public void getEmotesByChannelId(String stream, String id, boolean refresh) {
+        if (id != null) {
+            getEmotesByChannelId2(stream, id, refresh);
+        } else {
+            userIDs.getUserIDsAsap(r -> {
+                if (!r.hasError()) {
+                    getEmotesByChannelId2(stream, r.getId(stream), refresh);
+                }
+            }, stream);
+        }
+    }
+    
+    /**
+     * Request channel emotes if necessary. Only does one request attempt for a
+     * while, since at least currently it's only used for the Emote Dialog and
+     * manually triggered anyway. The reload button should be implemented at
+     * some point to be able to trigger a manual refresh.
+     *
+     * @param stream The stream name (required)
+     * @param id The stream id (required)
+     * @param refresh If true, request is done even if already requested before
+     */
+    private void getEmotesByChannelId2(String stream, String id, boolean refresh) {
+        int options = CachedBulkManager.ASAP | CachedBulkManager.UNIQUE;
+        if (refresh) {
+            options = options | CachedBulkManager.REFRESH;
+        }
+        String requestId = "channel_emotes:" + id;
+        m.query(null, options, new Req(requestId, () -> {
+            requests.requestEmotesByChannelId(stream, id, requestId);
+        }));
+    }
     
     public void getEmotesBySets(String... emotesets) {
         getEmotesBySets(new HashSet<>(Arrays.asList(emotesets)));
@@ -141,19 +192,12 @@ public class TwitchApi {
         emoticonManager2.addEmotesets(emotesets);
     }
     
-    private static final Object USER_EMOTES_UNIQUE = new Object();
-    
-    public void getUserEmotes(String userId) {
-        m.query(USER_EMOTES_UNIQUE,
-                null,
-                CachedBulkManager.ASAP | CachedBulkManager.WAIT | CachedBulkManager.REFRESH,
-                new Req("userEmotes", () -> {
-                    requests.requestUserEmotes(userId);
-                }));
-    }
-    
     public void refreshEmotes() {
         emoticonManager2.refresh();
+    }
+    
+    public void refreshSets(Set<String> emotesets) {
+        emoticonManager2.refresh(emotesets);
     }
     
     public void requestEmotesNow() {
@@ -176,29 +220,33 @@ public class TwitchApi {
     // Channel Information
     //====================
     
-    public void getChannelInfo(String stream) {
-        getChannelInfo(stream, null);
+    public void getChannelStatus(String stream) {
+        getChannelStatus(stream, null);
     }
     
-    public void getChannelInfo(String stream, String id) {
+    public void getChannelStatus(String stream, String id) {
         if (id != null) {
-            requests.getChannelInfo(id, stream);
+            requests.getChannelStatus(id, stream);
         } else {
             userIDs.getUserIDsAsap(r -> {
                 if (r.hasError()) {
-                    resultListener.receivedChannelInfo(stream, null, TwitchApi.RequestResultCode.FAILED);
+                    resultListener.receivedChannelStatus(ChannelStatus.createInvalid(null, stream), TwitchApi.RequestResultCode.FAILED);
                 } else {
-                    requests.getChannelInfo(r.getId(stream), stream);
+                    requests.getChannelStatus(r.getId(stream), stream);
                 }
             }, stream);
         }
+    }
+    
+    public void getStreamLabels() {
+        StreamLabels.request(requests);
     }
     
     public void getFollowers(String stream) {
         followerManager.request(stream);
     }
 
-    public Follower getSingeFollower(String stream, String streamId, String user, String userId, boolean refresh) {
+    public Follower getSingleFollower(String stream, String streamId, String user, String userId, boolean refresh) {
         return followerManager.getSingleFollower(stream, streamId, user, userId, refresh);
     }
     
@@ -206,30 +254,24 @@ public class TwitchApi {
         subscriberManager.request(stream);
     }
     
-    /**
-     * Get ChannelInfo, if cached. This will *not* request missing ChannelInfo.
-     * 
-     * @param stream
-     * @return 
-     */
-    public ChannelInfo getOnlyCachedChannelInfo(String stream) {
-        return channelInfoManager.getOnlyCachedChannelInfo(stream);
+    public UserInfo getCachedUserInfo(String channel, Consumer<UserInfo> result) {
+        return userInfoManager.getCached(channel, result);
     }
     
-    public ChannelInfo getCachedChannelInfo(String stream) {
-        return getCachedChannelInfo(stream, null);
+    public void getCachedUserInfo(List<String> logins, Consumer<Map<String, UserInfo>> result) {
+        userInfoManager.getCached(null, logins, result);
     }
     
-    /**
-     * Get ChannelInfo, which may be cached. This will request immediately if
-     * not cached.
-     * 
-     * @param stream
-     * @param id
-     * @return 
-     */
-    public ChannelInfo getCachedChannelInfo(String stream, String id) {
-        return channelInfoManager.getCachedChannelInfo(stream, id);
+    public UserInfo getCachedUserInfoById(String id, Consumer<UserInfo> result) {
+        return userInfoManager.getCachedById(id, result);
+    }
+
+    public void getCachedUserInfoById(List<String> ids, Consumer<Map<String, UserInfo>> result) {
+        userInfoManager.getCachedById(null, ids, result);
+    }
+
+    public UserInfo getCachedOnlyUserInfo(String login) {
+        return userInfoManager.getCachedOnly(login);
     }
     
     //===================
@@ -279,6 +321,10 @@ public class TwitchApi {
     
     public void setToken(String token) {
         this.defaultToken = token;
+    }
+    
+    public void setLocalUserId(String userId) {
+        this.localUserId = userId;
     }
     
     /**
@@ -357,131 +403,70 @@ public class TwitchApi {
         }, usernames.split(" "));
     }
     
-    //================
-    // User Management
-    //================
-    
-    public void followChannel(String user, String target) {
-        userIDs.getUserIDsAsap(r -> {
-            if (r.hasError()) {
-                resultListener.followResult("Couldn't follow '" + target + "' ("+r.getError()+")");
-            } else {
-                requests.followChannel(r.getId(user), r.getId(target), target, defaultToken);
-            }
-        }, user, target);
-    }
-    
-    public void unfollowChannel(String user, String target) {
-        userIDs.getUserIDsAsap(r -> {
-            if (r.hasError()) {
-                resultListener.followResult("Couldn't unfollow '" + target + "' ("+r.getError()+")");
-            } else {
-                requests.unfollowChannel(r.getId(user), r.getId(target), target, defaultToken);
-            }
-        }, user, target);
-    }
-    
     
     //===================
     // Admin / Moderation
     //===================
     
-    public void putChannelInfo(ChannelInfo info) {
+    public void putChannelInfoNew(ChannelStatus info) {
         userIDs.getUserIDsAsap(r -> {
             if (r.hasError()) {
-                resultListener.putChannelInfoResult(TwitchApi.RequestResultCode.FAILED);
+                resultListener.putChannelInfoResult(TwitchApi.RequestResultCode.FAILED, "Could not get user id");
             } else {
-                requests.putChannelInfo(r.getId(info.name), info, defaultToken);
+                String streamId = r.getId(info.channelLogin);
+                if (!info.hasCategoryId()) {
+                    // Search for category
+                    performGameSearch(info.category.name, (categories) -> {
+                        boolean categoryFound = false;
+                        for (StreamCategory category : categories) {
+                            if (category.nameMatches(info.category)) {
+                                requests.putChannelInfoNew(streamId, info.changeCategory(category), defaultToken);
+                                categoryFound = true;
+                            }
+                        }
+                        if (!categoryFound) {
+                            LOGGER.warning("Stream Category "+info.category.name+" not found");
+                            resultListener.putChannelInfoResult(TwitchApi.RequestResultCode.FAILED, "Category not found");
+                        }
+                    });
+                }
+                else {
+                    requests.putChannelInfoNew(streamId, info, defaultToken);
+                }
             }
-        }, info.name);
+        }, info.channelLogin);
     }
     
-    public void performGameSearch(String search, GameSearchListener listener) {
+    public void performGameSearch(String search, CategoryResult listener) {
         requests.getGameSearch(search, listener);
     }
     
-    public interface GameSearchListener {
-        public void result(Collection<String> result);
-    }
-    
-    //-------------
-    // Stream Tags
-    //-------------
-    /**
-     * Gets Community by id, which is guaranteed to contain description/rules.
-     * Cached only, so it doesn't requests it if it's not in the cache.
-     * 
-     * @param id
-     * @return 
-     */
-    public StreamTag getCachedOnlyTagInfo(String id) {
-        return communitiesManager.getCachedByIdWithInfo(id);
-    }
-    
-    public void requestAllTags(StreamTagManager.StreamTagsListener listener) {
-        requests.getAllTags(listener);
-    }
-    
-    /**
-     * Immediately requests the Community for the given id (no caching).
-     * 
-     * @param id
-     * @param listener 
-     */
-    public void getStreamTagById(String id, StreamTagListener listener) {
-        requests.getTagsByIds(new HashSet<>(Arrays.asList(new String[]{id})), (t,e) -> {
-            if (t != null && t.size() == 1) {
-                listener.received(t.iterator().next(), e);
-            } else {
-                listener.received(null, e);
-            }
-        });
-    }
-    
-    public void getInvalidStreamTags(Collection<StreamTag> checkTags, StreamTagsListener listener) {
-        Set<String> ids = new HashSet<>();
-        checkTags.forEach(t -> ids.add(t.getId()));
-        requests.getTagsByIds(ids, (resultTags, e) -> {
-            if (e != null) {
-                listener.received(resultTags, e);
-            } else {
-                Set<StreamTag> invalid = new HashSet<>();
-                // Any found tags that can not be manually set are invalid
-                resultTags.forEach(tag -> {
-                    if (!tag.canUserSet()) {
-                        invalid.add(tag);
-                    }
-                });
-                // Any not found tags are invalid
-                checkTags.forEach(tag -> {
-                    if (!resultTags.contains(tag)) {
-                        invalid.add(tag);
-                    }
-                });
-                listener.received(invalid, e);
-            }
-        });
-    }
-    
-    public void setStreamTags(String channelName, List<StreamTag> tags,
-            StreamTagPutListener listener) {
+    public void getBlockedTerms(String streamName, boolean refresh, Consumer<BlockedTerms> listener) {
         userIDs.getUserIDsAsap(r -> {
             if (r.hasError()) {
-                listener.result("Failed getting user id");
-            } else {
-                requests.setStreamTags(r.getId(channelName), tags, listener);
+                listener.accept(null);
             }
-        }, channelName);
+            else {
+                String streamId = r.getId(streamName);
+                blockedTermsManager.getBlockedTerms(streamId, streamName, refresh, listener);
+            }
+        }, streamName);
     }
     
-    public void getTagsByStream(String stream, StreamTagsListener listener) {
+    public void addBlockedTerm(String streamName, String text, Consumer<BlockedTerm> listener) {
         userIDs.getUserIDsAsap(r -> {
             if (r.hasError()) {
-                listener.received(null, "Error resolving id.");
-            } else {
-                requests.getTagsByStream(r.getId(stream), listener);
+                listener.accept(null);
             }
-        }, stream);
+            else {
+                String streamId = r.getId(streamName);
+                requests.addBlockedTerm(streamId, streamName, text, listener);
+            }
+        }, streamName);
+    }
+    
+    public void removeBlockedTerm(BlockedTerm term, Consumer<BlockedTerm> listener) {
+        requests.removeBlockedTerm(term, listener);
     }
     
     //-------------
@@ -493,7 +478,7 @@ public class TwitchApi {
             if (r.hasError()) {
                 resultListener.runCommercialResult(stream, "Failed to resolve id", RequestResultCode.UNKNOWN);
             } else {
-                requests.runCommercial(r.getId(stream), stream, defaultToken, length);
+                requests.runCommercial(r.getId(stream), stream, length);
             }
         }, stream);
     }
@@ -502,12 +487,34 @@ public class TwitchApi {
     // AutoMod
     //---------
     
+    public enum AutoModAction {
+        ALLOW, DENY
+    }
+    
+    public enum AutoModActionResult {
+        SUCCESS(204, ""),
+        ALREADY_PROCESSED(400, "Message already handled"),
+        BAD_AUTH(401, "Access denied (check Main - Account for access)"),
+        UNAUTHORIZED(403, "Access denied"),
+        NOT_FOUND(404, "Invalid message id"),
+        OTHER_ERROR(-1, "Unknown error");
+        
+        public final int responseCode;
+        public final String errorMessage;
+        
+        AutoModActionResult(int responseCode, String errorMessage) {
+            this.responseCode = responseCode;
+            this.errorMessage = errorMessage;
+        }
+        
+    }
+    
     public void autoModApprove(String msgId) {
-        requests.autoMod("approve", msgId, defaultToken);
+        requests.autoMod(AutoModAction.ALLOW, msgId, defaultToken, localUserId);
     }
     
     public void autoModDeny(String msgId) {
-        requests.autoMod("deny", msgId, defaultToken);
+        requests.autoMod(AutoModAction.DENY, msgId, defaultToken, localUserId);
     }
 
     //---------------
@@ -523,9 +530,228 @@ public class TwitchApi {
             }
         }, stream);
     }
+        
+    public static String[] ANNOUNCEMENT_COLORS = new String[]{
+        "", "primary", "blue", "green", "orange", "purple"
+    };
+    
+    public void sendAnnouncement(String stream, String message, String color) {
+        userIDs.getUserIDsAsap(r -> {
+            if (r.hasError()) {
+                resultListener.errorMessage("Failed to resolve channel id");
+            } else {
+                requests.sendAnnouncement(r.getId(stream), message, color);
+            }
+        }, stream);
+    }
+    
+    public void subscribe(ResultManager.Type type, Object listener) {
+        resultManager.subscribe(type, listener);
+    }
     
     public interface StreamMarkerResult {
         public void streamMarkerResult(String error);
+    }
+    
+    public void ban(User targetUser, int length, String reason, SimpleRequestResultListener listener) {
+        runWithUserIds(targetUser, listener, (streamId, targetId) -> {
+            requests.ban(streamId, targetId, length, reason, listener);
+        });
+    }
+    
+    public void unban(User targetUser, SimpleRequestResultListener listener) {
+        runWithUserIds(targetUser, listener, (streamId, targetId) -> {
+            requests.unban(streamId, targetId, listener);
+        });
+    }
+    
+    public void deleteMsg(Room room, String msgId, SimpleRequestResultListener listener) {
+        runWithStreamId(room, listener, streamId -> {
+            requests.deleteMsg(streamId, msgId, listener);
+        });
+    }
+    
+    public void shoutout(User targetUser, SimpleRequestResultListener listener) {
+        runWithUserIds(targetUser, listener, (streamId, targetId) -> {
+            requests.shoutout(streamId, targetId, listener);
+        });
+    }
+    
+    public void setVip(User targetUser, boolean add, SimpleRequestResultListener listener) {
+        runWithUserIds(targetUser, listener, (streamId, targetId) -> {
+            requests.setVip(streamId, targetId, add, listener);
+        });
+    }
+    
+    public void setModerator(User targetUser, boolean add, SimpleRequestResultListener listener) {
+        runWithUserIds(targetUser, listener, (streamId, targetId) -> {
+            requests.setModerator(streamId, targetId, add, listener);
+        });
+    }
+    
+    public void requestModerators(Room room, SimpleRequestResultListener listener) {
+        runWithStreamId(room, listener, streamId -> {
+            requests.getModerators(streamId, listener);
+        });
+    }
+    
+    public void requestVips(Room room, SimpleRequestResultListener listener) {
+        runWithStreamId(room, listener, streamId -> {
+            requests.getVips(streamId, listener);
+        });
+    }
+    
+    public void startRaid(Room room, String targetUsername, SimpleRequestResultListener listener) {
+        userIDs.getUserIDsAsap(r -> {
+            if (r.hasError()) {
+                listener.accept(SimpleRequestResult.error("Invalid username"));
+            }
+            else {
+                requests.startRaid(r.getId(room.getStream()), r.getId(targetUsername), listener);
+            }
+        }, room.getStream(), targetUsername);
+    }
+    
+    public void cancelRaid(Room room, SimpleRequestResultListener listener) {
+        runWithStreamId(room, listener, streamId -> {
+            requests.cancelRaid(streamId, listener);
+        });
+    }
+    
+    public void setShieldMode(Room room, boolean enabled, SimpleRequestResultListener listener) {
+        runWithStreamId(room, listener, streamId -> {
+            requests.setShieldMode(room.getStream(), streamId, enabled, listener);
+        });
+    }
+    
+    public void getShieldMode(Room room, boolean oncePerStream) {
+        String requestId = "getShieldMode:" + room.getStream();
+        if (oncePerStream) {
+            int options = CachedBulkManager.ASAP | CachedBulkManager.UNIQUE;
+            m.query(null, options, new Req(requestId, () -> {
+                runWithStreamId(room, null, streamId -> {
+                    requests.getShieldMode(room.getStream(), streamId, requestId);
+                });
+            }));
+        }
+        else {
+            runWithStreamId(room, null, streamId -> {
+                requests.getShieldMode(room.getStream(), streamId, requestId);
+            });
+        }
+    }
+    
+    public void removeShieldModeCache(Room room) {
+        String requestId = "getShieldMode:" + room.getStream();
+        m.removeCachedValue(new Req(requestId, null));
+    }
+    
+    public void whisper(String targetUsername, String msg, SimpleRequestResultListener listener) {
+        userIDs.getUserIDsAsap(r -> {
+            if (r.hasError()) {
+                listener.accept(SimpleRequestResult.error("Invalid username"));
+            }
+            else {
+                requests.whisper(r.getId(targetUsername), msg, listener);
+            }
+        }, targetUsername);
+    }
+    
+    public void setColor(String color, SimpleRequestResultListener listener) {
+        requests.setColor(color, listener);
+    }
+    
+    public static final String CHAT_SETTINGS_EMOTEONLY = "emote_mode";
+    public static final String CHAT_SETTINGS_FOLLOWER_MODE = "follower_mode";
+    public static final String CHAT_SETTINGS_FOLLOWER_MODE_DURATION = "follower_mode_duration";
+    public static final String CHAT_SETTINGS_SLOWMODE = "slow_mode";
+    public static final String CHAT_SETTINGS_SLOWMODE_TIME = "slow_mode_wait_time";
+    public static final String CHAT_SETTINGS_SUBONLY = "subscriber_mode";
+    public static final String CHAT_SETTINGS_UNIQUE = "unique_chat_mode";
+    
+    public void updateChatSettings(Room room, SimpleRequestResultListener listener, Object... data) {
+        runWithStreamId(room, listener, streamId -> {
+            requests.updateChatSettings(streamId, data, listener);
+        });
+    }
+    
+    private void runWithUserIds(User targetUser, SimpleRequestResultListener listener, BiConsumer<String, String> run) {
+        String roomId = targetUser.getRoom().getStreamId();
+        String targetId = targetUser.getId();
+        if (roomId == null || targetId == null) {
+            userIDs.getUserIDsAsap(r -> {
+                if (r.hasError()) {
+                    listener.accept(SimpleRequestResult.error("Invalid username"));
+                }
+                else {
+                    run.accept(
+                            r.getId(targetUser.getRoom().getStream()),
+                            r.getId(targetUser.getName()));
+                }
+            }, targetUser.getRoom().getStream(), targetUser.getName());
+        }
+        else {
+            run.accept(roomId, targetId);
+        }
+    }
+    
+    private void runWithStreamId(Room room, SimpleRequestResultListener listener, Consumer<String> run) {
+        String streamId = room.getStreamId();
+        if (streamId == null) {
+            userIDs.getUserIDsAsap(r -> {
+                if (r.hasError() && listener != null) {
+                    listener.accept(SimpleRequestResult.error("Invalid username"));
+                }
+                else {
+                    run.accept(r.getId(room.getStream()));
+                }
+            }, room.getStream());
+        }
+        else {
+            run.accept(streamId);
+        }
+    }
+    
+    public interface SimpleRequestResultListener {
+        
+        public void accept(SimpleRequestResult r);
+        
+    }
+    
+    public static class SimpleRequestResult {
+        
+        public final String error;
+        public final String result;
+        
+        private SimpleRequestResult(String result, String error) {
+            this.result = result;
+            this.error = error;
+        }
+        
+        public static SimpleRequestResult error(String errorMessage) {
+            return new SimpleRequestResult(null, errorMessage);
+        }
+        
+        public static SimpleRequestResult ok() {
+            return new SimpleRequestResult(null, null);
+        }
+        
+        public static SimpleRequestResult result(String result) {
+            return new SimpleRequestResult(result, null);
+        }
+        
+    }
+    
+    public void test() {
+        requests.test();
+    }
+    
+    public void addEventSub(String body, Consumer<EventSubAddResult> listener) {
+        requests.addEventSub(body, listener);
+    }
+    
+    public void removeEventSub(String id, Consumer<Integer> listener) {
+        requests.removeEventSub(id, listener);
     }
     
 }

@@ -22,7 +22,7 @@ public class OtherBadges {
     
     private static final Logger LOGGER = Logger.getLogger(OtherBadges.class.getName());
     
-    private static final String CACHE_FILE = Chatty.getCacheDirectory()+"other_badges";
+    private static final String CACHE_FILE = Chatty.getPathCreate(Chatty.PathType.CACHE).resolve("other_badges").toString();
     public static final int CACHE_EXPIRES_AFTER = 60*60*24;
     
     public static void requestBadges(OtherBadgesListener listener, boolean forcedRefresh) {
@@ -40,15 +40,24 @@ public class OtherBadges {
                 return false;
             }
         };
-        if (forcedRefresh || !cache.load()) {
-            String url = "https://tduva.com/res/badges";
-            //url = "http://127.0.0.1/twitch/badges/badges";
-            UrlRequest request = new UrlRequest(url);
-            request.setLabel("Other Badges");
-            request.async((result, responseCode) -> {
-                cache.dataReceived(result, forcedRefresh);
-            });
-        }
+        /**
+         * Always run in separate thread, since loading from cache would run
+         * badge image loading in GUI thread.
+         *
+         * A solution similar to emotes might be better, where the images load
+         * on demand, but this will do for now.
+         */
+        new Thread(() -> {
+            if (forcedRefresh || !cache.load()) {
+                String url = "https://tduva.com/res/badges";
+                //url = "http://127.0.0.1/twitch/badges/badges";
+                UrlRequest request = new UrlRequest(url);
+                request.setLabel("Other Badges");
+                request.async((result, responseCode) -> {
+                    cache.dataReceived(result, forcedRefresh);
+                });
+            }
+        }).start();
     }
     
     private static List<Usericon> parseUsericons(String json) {
@@ -76,6 +85,7 @@ public class OtherBadges {
             String id = (String) data.get("id");
             String version = (String) data.get("version");
             String url = (String) data.get("image_url");
+            String url2 = (String) data.get("image_url_2");
             String color = (String) data.get("color");
             String metaUrl = (String) data.get("meta_url");
             String position = (String) data.get("position");
@@ -94,7 +104,7 @@ public class OtherBadges {
 //                userids.add("36194025");
             }
 
-            Usericon icon = UsericonFactory.createThirdParty(id, version, url, title, metaUrl, color, usernames, userids, position);
+            Usericon icon = UsericonFactory.createThirdParty(id, version, url, url2, title, metaUrl, color, usernames, userids, position);
             return icon;
         } catch (Exception ex) {
             LOGGER.warning("Error parsing third-party badge: " + ex);

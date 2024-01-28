@@ -18,7 +18,7 @@ public class EmoticonManager2 {
     
     private static final Logger LOGGER = Logger.getLogger(EmoticonManager2.class.getName());
     
-    private static final int MAX_NUMBER_OF_SETS_IN_REQUEST = 400;
+    private static final int MAX_NUMBER_OF_SETS_IN_REQUEST = 20;
     
     /**
      * How often to try to make a request. This is used to "bunch up" requests
@@ -110,6 +110,13 @@ public class EmoticonManager2 {
         // Request both pending and already requested emotesets
         performRequest(true);
     }
+    
+    public synchronized void refresh(Set<String> emotesets) {
+        requestedEmotesets.addAll(emotesets);
+        for (Set<String> split : MiscUtil.splitSetByLimit(emotesets, MAX_NUMBER_OF_SETS_IN_REQUEST)) {
+            requests.requestEmotesetsNew(split);
+        }
+    }
 
     /**
      * Check if any emotesets should be requested, and request them.
@@ -141,7 +148,7 @@ public class EmoticonManager2 {
         requestedEmotesets.addAll(toRequest);
         
         for (Set<String> split : MiscUtil.splitSetByLimit(toRequest, MAX_NUMBER_OF_SETS_IN_REQUEST)) {
-            requests.requestEmotesets(split);
+            requests.requestEmotesetsNew(split);
         }
         lastRequestTime = System.currentTimeMillis();
     }

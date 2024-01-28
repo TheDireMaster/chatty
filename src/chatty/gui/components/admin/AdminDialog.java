@@ -2,13 +2,19 @@
 package chatty.gui.components.admin;
 
 import chatty.Chatty;
+import chatty.Helper;
+import chatty.gui.DockedDialogHelper;
+import chatty.gui.DockedDialogManager;
 import chatty.gui.GuiUtil;
 import chatty.gui.MainGui;
 import chatty.gui.components.LinkLabel;
+import chatty.gui.laf.LaF;
 import chatty.lang.Language;
 import chatty.util.api.ChannelInfo;
+import chatty.util.api.ChannelStatus;
 import chatty.util.api.TwitchApi;
 import chatty.util.api.TwitchApi.RequestResultCode;
+import chatty.util.dnd.DockContent;
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
@@ -32,13 +38,16 @@ public class AdminDialog extends JDialog {
     private final static String COMMERCIALS_TEXT = "[help-admin:commercials Help]";
     private final static String COMMERCIALS_TEXT_NO_ACCESS
             = "No Commercial Access available. [help-admin:access More information..]";
+    private final static String BLOCKED_TERMS_TEXT = "[help-admin: Help]";
+    private final static String BLOCKED_TERMS_TEXT_NO_ACCESS
+            = "Required access not available. [help-admin:access More information..]";
     
     // Colors for hideable labels
     private static final Color LABEL_INVISIBLE = new Color(0, 0, 0, 0);
     private static final Color LABEL_VISIBLE = new Color(120, 150, 150);
     
     // Insets for smaller kind of buttons
-    public static final Insets SMALL_BUTTON_INSETS = new Insets(-1,15,-1,15);
+    public static final Insets SMALL_BUTTON_INSETS = LaF.defaultButtonInsets() ? null : new Insets(-1,15,-1,15);
     // How often to call update() which updates times and runs commercials.
     private static final int UPDATE_DELAY = 4000;
 
@@ -49,6 +58,7 @@ public class AdminDialog extends JDialog {
     
     private final StatusPanel statusPanel;
     private final CommercialPanel commercialPanel;
+    private final BlockedTermsPanel blockedTermsPanel;
 
     // Shared
     private final JTabbedPane tabs;
@@ -64,13 +74,16 @@ public class AdminDialog extends JDialog {
     // Current access (not currentChannel specific)
     private boolean commercialAccess;
     private boolean editorAccess;
+    private boolean blockedTermsAccess;
+    
+    private final DockContent content;
+    protected final DockedDialogHelper helper;
 
-    public AdminDialog(MainGui main, TwitchApi api) {
+    public AdminDialog(MainGui main, TwitchApi api, DockedDialogManager dockedDialogs) {
         super(main);
         setTitle("Channel Admin - No Channel");
         this.main = main;
         this.api = api;
-        setResizable(false);
         addWindowListener(new WindowClosingListener());
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
 
@@ -79,10 +92,11 @@ public class AdminDialog extends JDialog {
         
         statusPanel = new StatusPanel(this, main, api);
         commercialPanel = new CommercialPanel(main);
-        
-        setLayout(new GridBagLayout());
+        blockedTermsPanel = new BlockedTermsPanel(this, api);
         
         GridBagConstraints gbc;
+        
+        JPanel mainPanel = new JPanel(new GridBagLayout());
         
         // Add to tab pane
         tabs = new JTabbedPane();
@@ -91,31 +105,39 @@ public class AdminDialog extends JDialog {
             @Override
             public void stateChanged(ChangeEvent e) {
                 updateInfoText();
+                if (currentChannel != null) {
+                    changeChannel(currentChannel);
+                }
             }
         });
-        tabs.addTab(Language.getString("admin.tab.status"), statusPanel);
+        JScrollPane statusScroll = new JScrollPane(statusPanel);
+        tabs.addTab(Language.getString("admin.tab.status"), statusScroll);
         tabs.addTab(Language.getString("admin.tab.commercial"), commercialPanel);
+        tabs.addTab("Blocked Terms", blockedTermsPanel);
         gbc = makeGbc(0,0,2,1);
         gbc.insets = new Insets(0,0,0,0);
-        add(tabs, gbc);
+        gbc.fill = GridBagConstraints.BOTH;
+        gbc.weightx = 1;
+        gbc.weighty = 1;
+        mainPanel.add(tabs, gbc);
         
         
         gbc = makeGbc(0,1,1,1);
         gbc.anchor = GridBagConstraints.WEST;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1;
-        add(infoText, gbc);
+        mainPanel.add(infoText, gbc);
         
         gbc = makeGbc(1,1,1,1);
         //gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.anchor = GridBagConstraints.EAST;
         close.setMnemonic(KeyEvent.VK_C);
-        add(close,gbc);
+        mainPanel.add(close,gbc);
         
+        
+        add(mainPanel, BorderLayout.CENTER);
         
         close.addActionListener(actionListener);
-        
-        
         
         
         finishDialog();
@@ -123,6 +145,63 @@ public class AdminDialog extends JDialog {
         startUpdateTimer();
         
         GuiUtil.installEscapeCloseOperation(this);
+        
+        content = dockedDialogs.createContent(mainPanel, "Admin", "-admin-");
+        
+        helper = dockedDialogs.createHelper(new DockedDialogHelper.DockedDialog() {
+            
+            @Override
+            public void setVisible(boolean visible) {
+                AdminDialog.super.setVisible(visible);
+            }
+
+            @Override
+            public boolean isVisible() {
+                return AdminDialog.super.isVisible();
+            }
+
+            @Override
+            public void addComponent(Component comp) {
+                add(comp, BorderLayout.CENTER);
+            }
+
+            @Override
+            public void removeComponent(Component comp) {
+                remove(comp);
+            }
+
+            @Override
+            public Window getWindow() {
+                return AdminDialog.this;
+            }
+
+            @Override
+            public DockContent getContent() {
+                return content;
+            }
+            
+            @Override
+            public void dockedChanged() {
+                updateTabTitle();
+            }
+            
+        });
+        helper.setChannelChangeListener(channel -> {
+            if (isVisible()) {
+                setChannel(Helper.toStream(channel));
+            }
+        });
+        helper.installContextMenu(tabs);
+        helper.installContextMenu(mainPanel);
+        helper.installContextMenu(infoText);
+    }
+    
+    @Override
+    public boolean isVisible() {
+        if (helper != null) {
+            return helper.isVisible();
+        }
+        return super.isVisible();
     }
     
     /**
@@ -151,8 +230,7 @@ public class AdminDialog extends JDialog {
         if (isVisible()) {
             statusPanel.update();
             commercialPanel.update();
-            // In case the text is going to be too big, breaking the dialog
-            finishDialog();
+            blockedTermsPanel.update();
         }
         commercialPanel.checkScheduled();
     }
@@ -164,14 +242,25 @@ public class AdminDialog extends JDialog {
         if (tabs.getSelectedIndex() == 0) {
             if (editorAccess) {
                 infoText.setText(EDITOR_TEXT);
-            } else {
+            }
+            else {
                 infoText.setText(EDITOR_TEXT_NO_ACCESS);
             }
-        } else {
+        }
+        else if (tabs.getSelectedIndex() == 1) {
             if (commercialAccess) {
                 infoText.setText(COMMERCIALS_TEXT);
-            } else {
+            }
+            else {
                 infoText.setText(COMMERCIALS_TEXT_NO_ACCESS);
+            }
+        }
+        else {
+            if (blockedTermsAccess) {
+                infoText.setText(BLOCKED_TERMS_TEXT);
+            }
+            else {
+                infoText.setText(BLOCKED_TERMS_TEXT_NO_ACCESS);
             }
         }
     }
@@ -184,9 +273,10 @@ public class AdminDialog extends JDialog {
      * @param edit_broadcast
      * @param commercials 
      */
-    public void updateAccess(boolean editor, boolean edit_broadcast, boolean commercials) {
+    public void updateAccess(boolean editor, boolean edit_broadcast, boolean commercials, boolean blockedTerms) {
         this.editorAccess = editor && edit_broadcast;
         this.commercialAccess = commercials;
+        this.blockedTermsAccess = blockedTerms;
         updateInfoText();
     }
 
@@ -233,6 +323,16 @@ public class AdminDialog extends JDialog {
             //update.setEnabled(true);
         }
         setTitle(Language.getString("admin.title", currentChannel));
+        updateTabTitle();
+    }
+    
+    private void updateTabTitle() {
+        if (helper.isDocked()) {
+            tabs.setTitleAt(0, currentChannel+": "+Language.getString("admin.tab.status"));
+        }
+        else {
+            tabs.setTitleAt(0, Language.getString("admin.tab.status"));
+        }
     }
 
     /**
@@ -243,8 +343,14 @@ public class AdminDialog extends JDialog {
      */
     private void changeChannel(String channel) {
         this.currentChannel = channel;
-        statusPanel.changeChannel(channel);
+        helper.setCurrentChannel(channel);
         commercialPanel.changeChannel(channel);
+        if (tabs.getSelectedIndex() == 0) {
+            statusPanel.changeChannel(channel);
+        }
+        if (tabs.getSelectedIndex() == 2) {
+            blockedTermsPanel.changeStream(channel);
+        }
         update();
     }
 
@@ -283,25 +389,25 @@ public class AdminDialog extends JDialog {
     private void close() {
         commercialPanel.saveSettings();
         if (commercialPanel.checkOnClose()) {
-            super.setVisible(false);
+            helper.setVisible(false, false);
         }
     }
     
     @Override
     public void setVisible(boolean state) {
         if (state) {
-            super.setVisible(true);
+            helper.setVisible(true, true);
         } else {
             close();
         }
     }
-
-    public void setChannelInfo(String channel, ChannelInfo info, RequestResultCode result) {
-        statusPanel.setChannelInfo(channel, info, result);
+    
+    public void channelStatusReceived(ChannelStatus status, RequestResultCode result) {
+        statusPanel.channelStatusReceived(status, result);
     }
     
-    public void setPutResult(RequestResultCode result) {
-        statusPanel.setPutResult(result);
+    public void setPutResult(RequestResultCode result, String error) {
+        statusPanel.setPutResult(result, error);
     }
 
     public void commercialResult(String stream, String text, RequestResultCode result) {

@@ -2,7 +2,12 @@
 package chatty;
 
 import chatty.util.StringUtil;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.regex.Matcher;
 import org.junit.Test;
 import static org.junit.Assert.*;
@@ -226,4 +231,163 @@ public class HelperTest {
         assertArrayEquals(Helper.getChainedCommands(input).toArray(), result);
     }
     
+    @Test
+    public void getForeachParamsTest() {
+        foreachTest(null, null, null);
+        foreachTest("", null, null);
+        foreachTest("a b c", "a b c", null);
+        foreachTest(">", null, null);
+        foreachTest("a b c>abc", "a b c", "abc");
+        foreachTest("a b c > abc", "a b c", "abc");
+        foreachTest("a b c  >  abc", "a b c", "abc");
+        foreachTest(">abc", null, "abc");
+        foreachTest("     >abc", null, "abc");
+        foreachTest(">> >abc", ">", "abc");
+        foreachTest(">> >abc<<", ">", "abc<<");
+        foreachTest(">> >abc>>", ">", "abc>");
+        foreachTest(">> >abc>", ">", "abc>");
+        foreachTest("weaf >> fawef", "weaf > fawef", null);
+        foreachTest("abc >     ", "abc", null);
+    }
+    
+    private static void foreachTest(String input, String... result) {
+        assertArrayEquals(Helper.getForeachParams(input), result);
+    }
+    
+    @Test
+    public void parseChannelsFromStringTest() {
+        parseChannelsTest("", true);
+        parseChannelsTest("$abc", true);
+        parseChannelsTest("#jaf-jiaefw,", true);
+        parseChannelsTest("#abc", true, "#abc");
+        parseChannelsTest("abc", true, "#abc");
+        parseChannelsTest("abc", false, "abc");
+        parseChannelsTest("#abc, abc", true, "#abc");
+        parseChannelsTest("#abc, abc", false, "#abc", "abc");
+        parseChannelsTest("#abc,abc", false, "#abc", "abc");
+        parseChannelsTest(" #abc,     abc ", false, "#abc", "abc");
+        parseChannelsTest(" #abc,     \nabc ", false, "#abc", "abc");
+        parseChannelsTest(" #abc, $##afwe, abc, # ", false, "#abc", "abc");
+        
+        Addressbook ab = new Addressbook(null, null, null);
+        ab.add("#chan", "cat");
+        ab.add("user", "cat");
+        ab.add("#chan2", "cat2");
+        ab.add("user2", "cat2");
+        
+        parseChannelsTest("[cat]", true);
+        Helper.parseChannelHelper = new Helper.ParseChannelHelper() {
+            @Override
+            public Collection<String> getFavorites() {
+                return Arrays.asList(new String[]{"#favChan1", "#favChan2", "#favChan3"});
+            }
+
+            @Override
+            public Collection<String> getNamesByCategory(String category) {
+                return ab.getNamesByCategory(category);
+            }
+
+            @Override
+            public boolean isStreamLive(String stream) {
+                return !stream.equals("chan2") && !stream.equals("favChan3");
+            }
+        };
+        parseChannelsTest("[cat]", false, "#chan", "user");
+        parseChannelsTest("[cat]", true, "#chan", "#user");
+        parseChannelsTest("[cat ]", true, "#chan", "#user");
+        parseChannelsTest("[cat #]", true, "#chan");
+        parseChannelsTest("[cat !#]", true, "#user");
+        parseChannelsTest("[cat2]", true, "#chan2", "#user2");
+        parseChannelsTest("#chan, [cat2]", true, "#chan", "#chan2", "#user2");
+        parseChannelsTest("#chan, [cat2], #chan3", true, "#chan", "#chan2", "#user2", "#chan3");
+        
+        parseChannelsTest("[*]", true, "#favchan1", "#favchan2", "#favchan3");
+        parseChannelsTest("[* live]", true, "#favchan1", "#favchan2");
+        
+        parseChannelsTest("[cat live]", true, "#chan", "#user");
+        parseChannelsTest("[cat2 # live]", true);
+        parseChannelsTest("[cat2 live]", true, "#user2");
+        parseChannelsTest("[cat live], [cat2 live]", true, "#chan", "#user", "#user2");
+        
+        Helper.parseChannelHelper = null;
+        parseChannelsTest("#chan, [cat2], #chan3", true, "#chan", "#chan3");
+        parseChannelsTest("[*]", true);
+        parseChannelsTest("[cat live]", true);
+    }
+    
+    private static void parseChannelsTest(String input, boolean prepend, String... result) {
+        assertEquals(new HashSet<>(Arrays.asList(result)), Helper.parseChannelsFromString(input, prepend));
+    }
+    
+    @Test
+    public void testGetChannelFromUrl() {
+        assertEquals("channel", Helper.getChannelFromUrl("twitch.tv/channel"));
+        assertEquals("channel", Helper.getChannelFromUrl("twitch.tv/channel/"));
+        assertEquals("channel", Helper.getChannelFromUrl("twitch.tv/channel/about/"));
+        assertEquals("channel_name", Helper.getChannelFromUrl("twitch.tv/channel_name/"));
+        assertEquals("channel_123_abc_", Helper.getChannelFromUrl("twitch.tv/channel_123_abc_"));
+        assertEquals("twitc.tv/channel/about/", Helper.getChannelFromUrl("twitc.tv/channel/about/"));
+        assertEquals("channel", Helper.getChannelFromUrl("channel"));
+        assertEquals("channel/", Helper.getChannelFromUrl("channel/"));
+        assertEquals("twitch.tv/$%&", Helper.getChannelFromUrl("twitch.tv/$%&"));
+        assertEquals("channel", Helper.getChannelFromUrl("https://twitch.tv/channel"));
+        assertEquals("channel", Helper.getChannelFromUrl("http://twitch.tv/channel"));
+        assertEquals("channel", Helper.getChannelFromUrl("https://www.twitch.tv/channel"));
+        assertEquals("channel", Helper.getChannelFromUrl("http://www.twitch.tv/channel"));
+        assertEquals("channel", Helper.getChannelFromUrl("www.twitch.tv/channel"));
+        assertEquals("https:///twitch.tv/channel", Helper.getChannelFromUrl("https:///twitch.tv/channel"));
+        assertEquals("https://wwww.twitch.tv/channel", Helper.getChannelFromUrl("https://wwww.twitch.tv/channel"));
+        
+        assertEquals("channel", Helper.getChannelFromUrl("https://www.twitch.tv/popout/channel/chat"));
+        assertEquals("channel", Helper.getChannelFromUrl("https://www.twitch.tv/popout/channel/viewercard/username"));
+        assertEquals("Channel123", Helper.getChannelFromUrl("https://www.twitch.tv/popout/Channel123/viewercard/username"));
+        assertEquals("channel123_", Helper.getChannelFromUrl("https://www.twitch.tv/popout/channel123_/viewercard/username"));
+        assertEquals("channel_123", Helper.getChannelFromUrl("https://www.twitch.tv/popout/channel_123/viewercard/username"));
+    }
+    
+    @Test
+    public void testGetPopoutUrlInfo() {
+        testPopoutUrlInfo("https://www.twitch.tv/popout/channel/chat", "channel", "chat", null);
+        testPopoutUrlInfo("https://www.twitch.tv/popout/channel/viewercard/username", "channel", "viewercard", "username");
+        testPopoutUrlInfo("https://www.twitch.tv/popout/channel/viewercard/username/", "channel", "viewercard", "username");
+        testPopoutUrlInfo("https://www.twitch.tv/popout/channel/viewercard/username/abc", "channel", "viewercard", "username");
+        testPopoutUrlInfo("www.twitch.tv/popout/channel/viewercard/username/", "channel", "viewercard", "username");
+        testPopoutUrlInfo("twitch.tv/popout/channel/viewercard/username/", "channel", "viewercard", "username");
+        testPopoutUrlInfo("twitch.tv/popout/channel123/viewercard/user_name/", "channel123", "viewercard", "user_name");
+    }
+    
+    private static void testPopoutUrlInfo(String url, String channel, String type, String username) {
+        Helper.TwitchPopoutUrlInfo info = Helper.getPopoutUrlInfo(url);
+        assertEquals(channel, info.channel);
+        assertEquals(type, info.type);
+        assertEquals(username, info.username);
+    }
+    
+    @Test
+    public void testChannelsListParsingRoundTrip() {
+        Set<String> expected = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        expected.add("foo");
+        expected.add("bar");
+        expected.add("hello");
+        expected.add("world");
+        TreeSet<String> actual = channelListRoundTrip(expected, false);
+        assertEquals(expected, actual);
+    }
+
+    @Test
+    public void testPrependedChannelsListParsingRoundTrip() {
+        Set<String> expected = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        expected.add("#foo");
+        expected.add("#bar");
+        expected.add("#hello");
+        expected.add("#world");
+        TreeSet<String> actual = channelListRoundTrip(expected, true);
+        assertEquals(expected, actual);
+    }
+
+    private TreeSet<String> channelListRoundTrip(Set<String> original, boolean prepend) {
+        TreeSet<String> copy = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        copy.addAll(Helper.parseChannelsFromString(Helper.buildStreamsString(original), prepend));
+        return copy;
+    }
 }

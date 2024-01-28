@@ -4,6 +4,7 @@ package chatty.gui.components.menus;
 import chatty.Helper;
 import chatty.util.StringUtil;
 import chatty.util.commands.CustomCommand;
+import chatty.util.commands.Parameters;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.KeyEvent;
@@ -121,17 +122,25 @@ public abstract class ContextMenu extends JPopupMenu implements ActionListener {
         return addItem(action, text, -1, parent, icon);
     }
 
-    public JMenuItem addCommandItem(CommandMenuItem item) {
+    public JMenuItem addCommandItem(CommandMenuItem item, Parameters parameters) {
         if (item.getCommand() == null && item.getLabel() == null) {
-            addSeparator(item.getPos(), item.getParent());
+            if (item.checkRestrictions(parameters)) {
+                addSeparator(item.getPos(), item.getParent());
+            }
+            else {
+                addItem("dummy"+item.getId(), "", item.getPos(), item.getParent(), null);
+            }
         } else if (item.getCommand() == null) {
-            JMenu menu = getSubmenu(item.getLabel(), item.getPos());
+            JMenu menu = getSubmenu(item.getLabel(), item.getLabel(parameters), item.getPos());
+            menu.setToolTipText(item.getTooltipHtml());
             addKey(item, menu);
+            return menu;
         } else {
             commands.put(item.getId(), item.getCommand());
-            JMenuItem mItem = addItem(item.getId(), item.getLabel(), item.getPos(), item.getParent(), null);
-            mItem.setToolTipText(StringUtil.shortenTo("<html><body>Command: <code>"+Helper.htmlspecialchars_encode(item.getCommand().getRaw())+"</code>", 100));
+            JMenuItem mItem = addItem(item.getId(), item.getLabel(parameters), item.getPos(), item.getParent(), null);
+            mItem.setToolTipText(item.getTooltipHtml());
             addKey(item, mItem);
+            return mItem;
         }
         return null;
     }
@@ -164,11 +173,11 @@ public abstract class ContextMenu extends JPopupMenu implements ActionListener {
         }
     }
     
-    protected void addRadioItem(String action, String text, String group) {
+    public void addRadioItem(String action, String text, String group) {
         items.put(action, add(makeRadioItem(action, text, group)));
     }
     
-    protected void addRadioItem(String action, String text, String group, String parent) {
+    public void addRadioItem(String action, String text, String group, String parent) {
         if (parent != null) {
             JMenuItem item = makeRadioItem(action, text, group);
             getSubmenu(parent).add(item);
@@ -200,7 +209,7 @@ public abstract class ContextMenu extends JPopupMenu implements ActionListener {
         }
     }
     
-    protected void addSeparator(String parent) {
+    public void addSeparator(String parent) {
         addSeparator(-1, parent);
     }
     
@@ -218,17 +227,25 @@ public abstract class ContextMenu extends JPopupMenu implements ActionListener {
         return subMenus.containsKey(name);
     }
     
+    public void registerSubmenu(JMenu menu) {
+        subMenus.put(menu.getText(), menu);
+    }
+    
     private JMenu getSubmenu(String name, int pos) {
-        if (subMenus.get(name) == null) {
+        return getSubmenu(name, name, pos);
+    }
+    
+    private JMenu getSubmenu(String key, String name, int pos) {
+        if (subMenus.get(key) == null) {
             JMenu menu = new JMenu(name);
             if (pos > -1) {
                 insert(menu, pos);
             } else {
                 add(menu);
             }
-            subMenus.put(name, menu);
+            subMenus.put(key, menu);
         }
-        return subMenus.get(name);
+        return subMenus.get(key);
     }
     
     private JMenu getSubmenu(String name) {
@@ -239,8 +256,24 @@ public abstract class ContextMenu extends JPopupMenu implements ActionListener {
         getSubmenu(name, -1).setIcon(icon);
     }
     
-    protected JMenuItem getItem(String action) {
+    public JMenuItem getItem(String action) {
         return items.get(action);
+    }
+    
+    public void removeEmpty() {
+        for (JMenuItem item : items.values()) {
+            if (item.getText().isEmpty()) {
+                remove(item);
+                for (JMenu menu : subMenus.values()) {
+                    menu.remove(item);
+                }
+            }
+        }
+        for (JMenu menu : subMenus.values()) {
+            if (menu.getText().isEmpty()) {
+                remove(menu);
+            }
+        }
     }
  
 }

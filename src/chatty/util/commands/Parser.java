@@ -1,6 +1,8 @@
 
 package chatty.util.commands;
 
+import chatty.util.Pair;
+import chatty.util.SyntaxHighlighter;
 import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -20,9 +22,21 @@ public class Parser {
     private final String input;
     private final StringReader reader;
     
-    public Parser(String text) {
+    private String escape = "\\";
+    private String special = "$";
+    
+    public Parser(String text, String special, String escape) {
         input = text;
         reader = new StringReader(text);
+        this.special = special;
+        this.escape = escape;
+    }
+    
+    private SyntaxHighlighter syntaxHighlighter;
+    
+    Items parse(SyntaxHighlighter syntaxHighlighter) throws ParseException {
+        this.syntaxHighlighter = syntaxHighlighter;
+        return parse();
     }
     
     /**
@@ -32,7 +46,13 @@ public class Parser {
      * @throws ParseException 
      */
     Items parse() throws ParseException {
-        return parse(null);
+        if (special.length() > 1 || escape.length() > 1) {
+            error("Special/escape must each be a single character", 0);
+        }
+        if (special.equals(escape) && !escape.isEmpty()) {
+            error("Special and escape must not be equal", 0);
+        }
+        return parse((String) null);
     }
     
     /**
@@ -47,9 +67,16 @@ public class Parser {
     private Items parse(String to) throws ParseException {
         Items items = new Items();
         while (reader.hasNext() && (to == null || !reader.peek().matches(to))) {
-            if (accept("$")) {
-                items.add(specialThing());
-            } else if (accept("\\")) {
+            if (accept(special)) {
+                Item item = specialThing();
+                if (to == null) {
+                    // Top-level item
+                    items.add(new SpecialEscape(item));
+                }
+                else {
+                    items.add(item);
+                }
+            } else if (accept(escape)) {
                 if (reader.hasNext()) {
                     // Just read next character as literal
                     items.add(reader.next());
@@ -62,6 +89,34 @@ public class Parser {
         return items;
     }
     
+    private void startHl(int offset, SyntaxHighlighter.Type type) {
+        if (syntaxHighlighter != null) {
+            syntaxHighlighter.start(reader.pos() + offset, type);
+        }
+    }
+    
+    private void endHl() {
+        if (syntaxHighlighter != null) {
+            syntaxHighlighter.end(reader.pos() + 1);
+        }
+    }
+    
+    private void addHl(String character) {
+        if (syntaxHighlighter == null || "$".contains(character)) {
+            return;
+        }
+        
+        if ("-".contains(character)) {
+            syntaxHighlighter.add(reader.pos(), reader.pos() + 1, SyntaxHighlighter.Type.IDENTIFIER);
+        }
+        else if (character.equals("\\")) {
+            syntaxHighlighter.add(reader.pos(), reader.pos() + 1, SyntaxHighlighter.Type.ESCAPE);
+        }
+        else {
+            syntaxHighlighter.add(reader.pos(), reader.pos() + 1, SyntaxHighlighter.Type.REGULAR2);
+        }
+    }
+    
     /**
      * If the parser encountered something unexpected, this will create an error
      * message and throw a ParseException.
@@ -72,7 +127,7 @@ public class Parser {
     private void error(String message, int offset) throws ParseException {
         throw new ParseException(message, reader.pos() + offset);
     }
-
+    
     /**
      * A single character that the parser can accept as next character, but
      * won't throw an error if it's not there. If the character is indeed there
@@ -84,6 +139,7 @@ public class Parser {
     private boolean accept(String character) {
         if (reader.hasNext() && reader.peek().equals(character)) {
             reader.next();
+            addHl(character);
             return true;
         }
         return false;
@@ -93,12 +149,11 @@ public class Parser {
         return reader.hasNext() && reader.peek().equals(character);
     }
     
-    private boolean acceptMatch(String regex) {
+    private String acceptMatch(String regex) {
         if (reader.hasNext() && reader.peek().matches(regex)) {
-            reader.next();
-            return true;
+            return reader.next();
         }
-        return false;
+        return null;
     }
     
     /**
@@ -112,6 +167,7 @@ public class Parser {
         if (!reader.hasNext() || !reader.next().equals(character)) {
             error("Expected '"+character+"'", 0);
         }
+        addHl(character);
     }
     
     /**
@@ -142,6 +198,8 @@ public class Parser {
         return "";
     }
     
+    private static final String QUOTES = "[\"`']";
+    
     /**
      * Parse stuff that occurs after a '$'.
      * 
@@ -149,8 +207,20 @@ public class Parser {
      * @throws ParseException 
      */
     private Item specialThing() throws ParseException {
-        boolean isRequired = accept("$");
+        String quote;
+        if ((quote = acceptMatch(QUOTES)) != null) {
+            startHl(-1, SyntaxHighlighter.Type.ESCAPE);
+            return literal(quote);
+        }
+        // Not quite sure yet how this feature should work exactly
+//        String escapeCharacter = readOne("[^\\Q"+special+"\\Ea-zA-Z0-9()]");
+//        if (escapeCharacter.length() == 1) {
+//            return changedEscapeCharacter(escapeCharacter);
+//        }
+        startHl(0, SyntaxHighlighter.Type.REGULAR);
+        boolean isRequired = accept(special);
         String type = functionName();
+        endHl();
         if (type.isEmpty()) {
             return replacement(isRequired);
         }
@@ -172,6 +242,9 @@ public class Parser {
         else if (type.equals("upper")) {
             return upper(isRequired);
         }
+        else if (type.equals("trim")) {
+            return trim(isRequired);
+        }
         else if (type.equals("rand")) {
             return rand(isRequired);
         }
@@ -183,6 +256,12 @@ public class Parser {
         }
         else if (type.equals("urlencode")) {
             return urlencode(isRequired);
+        }
+        else if (type.equals("cs")) {
+            return escape(Escape.Type.CHAIN, isRequired);
+        }
+        else if (type.equals("fs")) {
+            return escape(Escape.Type.FOREACH, isRequired);
         }
         else if (type.equals("sort")) {
             return sort(isRequired);
@@ -199,8 +278,23 @@ public class Parser {
         else if (type.equals("calc")) {
             return calc(isRequired);
         }
+        else if (type.equals("round")) {
+            return round(isRequired);
+        }
         else if (type.equals("input")) {
             return input(isRequired);
+        }
+        else if (type.equals("request")) {
+            return request(isRequired);
+        }
+        else if (type.equals("json")) {
+            return json(isRequired);
+        }
+        else if (type.equals("j")) {
+            return jsonPath(isRequired);
+        }
+        else if (type.equals("quote")) {
+            return quote(isRequired);
         }
         else {
             error("Invalid function '"+type+"'", 0);
@@ -214,25 +308,30 @@ public class Parser {
      * @return 
      */
     private Item identifier() throws ParseException {
+        startHl(1, SyntaxHighlighter.Type.IDENTIFIER);
         String ref = readAll("[a-zA-Z0-9-_]");
-        Matcher m = Pattern.compile("([0-9]+)(-)?").matcher(ref);
         if (ref.isEmpty()) {
             error("Expected identifier", 1);
         }
+        Matcher m = Pattern.compile("([0-9]+)(-)?").matcher(ref);
         if (m.matches()) {
             int index = Integer.parseInt(m.group(1));
             if (index == 0) {
                 error("Invalid numeric identifier 0", 0);
             }
             boolean toEnd = m.group(2) != null;
+            endHl();
             return new RangeIdentifier(index, toEnd);
         } else {
+            endHl();
             return new Identifier(ref);
         }
     }
     
     private Item tinyIdentifier() throws ParseException {
+        startHl(1, SyntaxHighlighter.Type.IDENTIFIER);
         String ref = readOne("[0-9]");
+        endHl();
         if (ref.isEmpty()) {
             error("Expected numeric identifier", 1);
         }
@@ -328,6 +427,13 @@ public class Parser {
         return new Upper(identifier, isRequired);
     }
     
+    private Item trim(boolean isRequired) throws ParseException {
+        expect("(");
+        Item identifier = param();
+        expect(")");
+        return new Trim(identifier, isRequired);
+    }
+    
     private Item rand(boolean isRequired) throws ParseException {
         expect("(");
         List<Item> params = new ArrayList<>();
@@ -354,14 +460,18 @@ public class Parser {
         Item format = param();
         Item timezone = null;
         Item locale = null;
+        Item timestamp = null;
         if (accept(",")) {
             timezone = param();
         }
         if (accept(",")) {
             locale = param();
         }
+        if (accept(",")) {
+            timestamp = param();
+        }
         expect(")");
-        return new DateTime(format, timezone, locale, isRequired);
+        return new DateTime(format, timezone, locale, timestamp, isRequired);
     }
     
     private Item urlencode(boolean isRequired) throws ParseException {
@@ -369,6 +479,13 @@ public class Parser {
         Item item = param();
         expect(")");
         return new UrlEncode(item, isRequired);
+    }
+    
+    private Item escape(Escape.Type type, boolean isRequired) throws ParseException {
+        expect("(");
+        Item item = param();
+        expect(")");
+        return new Escape(item, type, isRequired);
     }
     
     private Item sort(boolean isRequired) throws ParseException {
@@ -426,6 +543,25 @@ public class Parser {
         return new Calc(item, isRequired);
     }
     
+    private Item round(boolean isRequired) throws ParseException {
+        expect("(");
+        Item item = param();
+        Item decimals = null;
+        Item roundingMode = null;
+        Item minDecimals = null;
+        if (accept(",")) {
+            decimals = param();
+        }
+        if (accept(",")) {
+            roundingMode = param();
+        }
+        if (accept(",")) {
+            minDecimals = param();
+        }
+        expect(")");
+        return new Round(item, decimals, roundingMode, minDecimals, isRequired);
+    }
+    
     private Item input(boolean isRequired) throws ParseException {
         expect("(");
         Item message = param();
@@ -441,16 +577,110 @@ public class Parser {
         return new Input(type, message, initial, isRequired);
     }
     
+    private Item request(boolean isRequired) throws ParseException {
+        expect("(");
+        Item url = param();
+        List<Item> options = new ArrayList<>();
+        if (accept(",")) {
+            do {
+                options.add(param());
+            } while (accept(","));
+        }
+        expect(")");
+        return new Request(url, options, isRequired);
+    }
+    
+    private Item json(boolean isRequired) throws ParseException {
+        expect("(");
+        Item input = param();
+        expect(",");
+        Item output = param();
+        expect(")");
+        return new Json(input, output, isRequired);
+    }
+    
+    private Item jsonPath(boolean isRequired) throws ParseException {
+        expect("(");
+        Item path = param();
+        Item def = null;
+        if (accept(",")) {
+            def = param();
+        }
+        List<Pair<Item, Boolean>> subItems = new ArrayList<>();
+        while (accept(",")) {
+            boolean each = false;
+            if (reader.accept("each:")) {
+                each = true;
+            }
+            subItems.add(new Pair<>(param(), each));
+        }
+        expect(")");
+        return new JsonPathItem(path, def, subItems, isRequired);
+    }
+    
+    private Item quote(boolean isRequired) throws ParseException {
+        expect("(");
+        Item input = param();
+        Item quote = null;
+        if (accept(",")) {
+            quote = param();
+        }
+        expect(")");
+        return new Quote(input, quote, isRequired);
+    }
+    
     private Replacement replacement(boolean isRequired) throws ParseException {
         if (accept("(")) {
             Item identifier = identifier();
+            Item args = null;
+            if (accept(",")) {
+                args = param();
+            }
             expect(")");
-            return new Replacement(identifier, isRequired);
+            return new Replacement(identifier, args, isRequired);
         }
         else {
             Item identifier = tinyIdentifier();
-            return new Replacement(identifier, isRequired);
+            return new Replacement(identifier, null, isRequired);
         }
+    }
+    
+    private Item literal(String quote) throws ParseException {
+        StringBuilder b = new StringBuilder();
+        endHl();
+        while (reader.hasNext()) {
+            if (reader.peek().equals(quote)) {
+                reader.next();
+                if (reader.hasNext() && reader.peek().equals(quote)) {
+                    b.append(reader.next());
+                }
+                else {
+                    break;
+                }
+            }
+            else {
+                b.append(reader.next());
+            }
+        }
+        // The last character isn't necessarily a closing quote
+        if (reader.last().matches(QUOTES)) {
+            addHl("\\");
+        }
+        // Ending quote would have already been consumed
+        return new Literal(b.toString());
+    }
+    
+    private Item changedEscapeCharacter(String escapeCharacter) throws ParseException {
+        String quote = acceptMatch(QUOTES);
+        if (quote == null) {
+            error("Expected one of: "+QUOTES, 1);
+        }
+        String currentEscape = escape;
+        escape = escapeCharacter;
+        Item result = parse(quote);
+        expect(quote);
+        escape = currentEscape;
+        return result;
     }
     
     private String functionName() {

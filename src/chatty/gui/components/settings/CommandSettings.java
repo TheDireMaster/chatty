@@ -9,9 +9,10 @@ import chatty.gui.components.menus.CommandMenuItem;
 import chatty.gui.components.menus.CommandMenuItems;
 import chatty.gui.components.menus.ContextMenu;
 import chatty.gui.components.menus.TestContextMenu;
-import chatty.gui.components.userinfo.UserInfo;
+import chatty.gui.components.userinfo.UserInfoDialog;
 import chatty.gui.components.userinfo.UserInfoListener;
 import chatty.util.StringUtil;
+import chatty.util.commands.CommandSyntaxHighlighter;
 import chatty.util.commands.CustomCommand;
 import chatty.util.commands.CustomCommands;
 import chatty.util.commands.Parameters;
@@ -64,17 +65,10 @@ public class CommandSettings extends SettingsPanel {
                 return input.trim();
             }
         });
-        items.setTester(new Editor.Tester() {
-
-            @Override
-            public String test(Window parent, Component component, int x, int y, String value) {
-                CustomCommand command = CustomCommands.parseCommandWithName(value);
-                showCommandInfoPopup(component, command);
-                return null;
-            }
-        });
+        items.setTester(createCommandTester());
         items.setInfo(INFO_COMMANDS);
         items.setInfoLinkLabelListener(d.getLinkLabelListener());
+        items.setSyntaxHighlighter(new CommandSyntaxHighlighter());
         gbc.fill = GridBagConstraints.BOTH;
         gbc.weightx = 1;
         gbc.weighty = 1;
@@ -99,7 +93,7 @@ public class CommandSettings extends SettingsPanel {
             @Override
             public String test(Window parent, Component component, int x, int y, String value) {
                 updateErrors(value);
-                UserInfo dialog = new UserInfo(parent, new UserInfoListener() {
+                UserInfoDialog dialog = new UserInfoDialog(parent, new UserInfoListener() {
 
                     @Override
                     public void anonCustomCommand(Room room, CustomCommand command, Parameters parameters) {
@@ -109,7 +103,7 @@ public class CommandSettings extends SettingsPanel {
                         JOptionPane.showMessageDialog(parent, result, "Command result", JOptionPane.INFORMATION_MESSAGE);
                     }
                 }, null, d.settings, null);
-                dialog.setUserDefinedButtonsDef(value);
+                dialog.setUserDefinedButtonsDef(value, true);
                 GuiUtil.setLocationRelativeTo(dialog, parent);
                 dialog.show(component, user, "s0m3-msg-1d", null, null);
                 return null;
@@ -122,7 +116,7 @@ public class CommandSettings extends SettingsPanel {
              * @return 
              */
             private void updateErrors(String value) {
-                user.clearMessages();
+                user.clearLines();
                 List<CommandMenuItem> items = CommandMenuItems.parse(value);
                 for (CommandMenuItem item : items) {
                     if (item.getCommand() != null && item.getCommand().hasError()) {
@@ -142,6 +136,8 @@ public class CommandSettings extends SettingsPanel {
         addSetting("timeoutButtons", "userDialog", 3, menus, userDialogTester);
         addSetting("textContextMenu", "textMenu", 4, menus, menuTester);
         addSetting("adminContextMenu", "adminMenu", 5, menus, menuTester);
+        menus.add(d.addSimpleBooleanSetting("menuCommandLabels"), SettingsDialog.makeGbc(0, 6, 2, 1, GridBagConstraints.WEST));
+        menus.add(d.addSimpleBooleanSetting("menuRestrictions"), SettingsDialog.makeGbc(0, 7, 2, 1, GridBagConstraints.WEST));
     }
     
     private void addSetting(String settingName, String infoName, int y, JPanel panel, Editor.Tester tester) {
@@ -160,6 +156,18 @@ public class CommandSettings extends SettingsPanel {
         panel.add(setting, gbc);
     }
     
+    public static Editor.Tester createCommandTester() {
+        return new Editor.Tester() {
+
+            @Override
+            public String test(Window parent, Component component, int x, int y, String value) {
+                CustomCommand command = CustomCommands.parseCommandWithName(value);
+                showCommandInfoPopup(component, command);
+                return null;
+            }
+        };
+    }
+    
     public static void showCommandInfoPopup(Component parent, CustomCommand command) {
         String message = "<p style='font-family:sans-serif;'>This shows how the "
                 + "parser understands the part to be executed. It may not be "
@@ -170,9 +178,9 @@ public class CommandSettings extends SettingsPanel {
             message += "No command.";
         } else if (command.hasError()) {
             message += "<p style='font-family:monospaced;'>"
-                    + "Error: "+formatCommandInfo(command.getError())+"</p>";
+                    + "Error: "+formatCommandInfo(command.getError(), true)+"</p>";
         } else {
-            message += formatCommandInfo(command.toString());
+            message += formatCommandInfo(command.toString(), false);
         }
         String name = "";
         String chan = "";
@@ -185,8 +193,23 @@ public class CommandSettings extends SettingsPanel {
     }
     
     public static String formatCommandInfo(String input) {
-        return Helper.htmlspecialchars_encode(input)
-                .replace("\n", "<br>").replace(" ", "&nbsp;");
+        return formatCommandInfo(input, false);
+    }
+    
+    public static String formatCommandInfo(String input, boolean singleLine) {
+        if (input == null) {
+            return "<em>Empty</em>";
+        }
+        String result = Helper.htmlspecialchars_encode(input)
+                .replace("\n", "<br>");
+        if (singleLine) {
+            result = result.replace(" ", "&nbsp;");
+        }
+        else {
+            // Preserve display of several spaces in a row
+            result = result.replace("  ", "&nbsp;&nbsp;");
+        }
+        return result;
     }
     
 }

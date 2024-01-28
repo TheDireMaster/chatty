@@ -9,12 +9,29 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.HttpURLConnection;
 import java.net.SocketTimeoutException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.charset.Charset;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 import java.util.zip.GZIPInputStream;
+import org.apache.hc.client5.http.classic.methods.HttpUriRequestBase;
+import org.apache.hc.client5.http.config.RequestConfig;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
+import org.apache.hc.client5.http.impl.classic.HttpClientBuilder;
+import org.apache.hc.core5.http.ClassicHttpRequest;
+import org.apache.hc.core5.http.ContentType;
+import org.apache.hc.core5.http.Header;
+import org.apache.hc.core5.http.HttpEntity;
+import org.apache.hc.core5.http.ParseException;
+import org.apache.hc.core5.http.io.entity.EntityUtils;
+import org.apache.hc.core5.http.io.entity.StringEntity;
+import org.apache.hc.core5.util.Timeout;
 import org.json.simple.JSONObject;
 
 /**
@@ -80,15 +97,6 @@ public class Request implements Runnable {
     }
     
     /**
-     * Sets the content type of the send data.
-     * 
-     * @param contentType 
-     */
-    public void setContentType(String contentType) {
-        this.contentType = contentType;
-    }
-    
-    /**
      * Set the listener for this request. Should probably not be set when this
      * request is supposed to be performed by QueuedApi, since it will overwrite
      * it (set to Entry instead).
@@ -101,6 +109,15 @@ public class Request implements Runnable {
 
     @Override
     public void run() {
+        if (requestMethod.equals("PATCH")) {
+            apache();
+        }
+        else {
+            regular();
+        }
+    }
+    
+    private void apache() {
         if (listener == null) {
             return;
         }
@@ -109,11 +126,101 @@ public class Request implements Runnable {
         int ratelimitRemaining = -1;
         String responseEncoding = null;
         String requestError = null;
-
-        LOGGER.info(String.format("%s%s: %s",
+        String errorText = null;
+        
+        LOGGER.info(String.format("%s*: %s%s",
                 requestMethod,
-                token != null ? " (auth) " : "",
-                url));
+                url,
+                data != null ? " ("+data+")" : ""));
+        
+        RequestConfig config = RequestConfig.custom()
+                .setConnectTimeout(Timeout.ofMilliseconds(CONNECT_TIMEOUT))
+                .setResponseTimeout(30, TimeUnit.SECONDS)
+                .build();
+        try (CloseableHttpClient httpclient = HttpClientBuilder.create().setDefaultRequestConfig(config).build()) {
+            ClassicHttpRequest request = new HttpUriRequestBase(requestMethod, new URI(url));
+            request.addHeader("Client-ID", CLIENT_ID);
+            if (token != null) {
+                request.addHeader("Authorization", "Bearer "+token);
+            }
+            if (data != null) {
+                StringEntity stringEntity;
+                if (contentType.equals("application/json")) {
+                    stringEntity = new StringEntity(data, ContentType.APPLICATION_JSON, "UTF-8", false);
+                }
+                else {
+                    stringEntity = new StringEntity(data, CHARSET);
+                }
+                request.setEntity(stringEntity);
+            }
+            try (CloseableHttpResponse response = httpclient.execute(request)) {
+                responseCode = response.getCode();
+                responseEncoding = getStringHeader(response.getFirstHeader("Content-Encoding"), null);
+                ratelimitRemaining = getIntHeader(response.getFirstHeader("Ratelimit-Remaining"), -1);
+                HttpEntity responseEntity = response.getEntity();
+                if (responseEntity != null) {
+                    responseText = EntityUtils.toString(responseEntity, Charset.forName("UTF-8"));
+                    EntityUtils.consume(responseEntity);
+                    if (!String.valueOf(responseCode).startsWith("2")) {
+                        errorText = responseText;
+                        responseText = null;
+                    }
+                }
+            }
+        }
+        catch (IOException | URISyntaxException | ParseException ex) {
+            requestError = ex.toString();
+        }
+        
+        //-----------------------
+        // Debug output / Output
+        //-----------------------
+        LOGGER.info(String.format(Locale.ROOT, "GOT (%d/%d, %d%s): %s%s",
+                responseCode,
+                ratelimitRemaining,
+                responseText != null ? responseText.length() : -1,
+                responseEncoding != null ? ", " + responseEncoding : "",
+                url,
+                requestError != null ? " ["+requestError+"]" : ""));
+        
+        
+        listener.requestResult(responseText, responseCode, errorText, ratelimitRemaining);
+    }
+    
+    private static int getIntHeader(Header header, int defaultValue) {
+        if (header != null) {
+            try {
+                return Integer.parseInt(header.getValue());
+            }
+            catch (NumberFormatException ex) {
+                // Do nothing
+            }
+        }
+        return defaultValue;
+    }
+    
+    private static String getStringHeader(Header header, String defaultValue) {
+        if (header != null) {
+            return header.getValue();
+        }
+        return defaultValue;
+    }
+    
+    private void regular() {
+        if (listener == null) {
+            return;
+        }
+        String responseText = null;
+        String errorText = null;
+        int responseCode = -1;
+        int ratelimitRemaining = -1;
+        String responseEncoding = null;
+        String requestError = null;
+
+        LOGGER.info(String.format("%s: %s%s",
+                requestMethod,
+                url,
+                data != null ? " ("+data+")" : ""));
         
         HttpURLConnection connection = null;
         try {
@@ -130,14 +237,13 @@ public class Request implements Runnable {
                 connection.setRequestProperty("Authorization", "Bearer "+token);
             }
             connection.setRequestMethod(requestMethod);
-            
+
             if (data != null) {
                 connection.setRequestProperty("Content-Type", contentType);
                 connection.setDoOutput(true);
                 try (OutputStreamWriter out = new OutputStreamWriter(connection.getOutputStream(), CHARSET)) {
                     out.write(data);
                 }
-                LOGGER.info("Sending data: "+data);
             }
 
             //------------------
@@ -145,25 +251,12 @@ public class Request implements Runnable {
             //------------------
             responseEncoding = connection.getContentEncoding();
             ratelimitRemaining = connection.getHeaderFieldInt("Ratelimit-Remaining", -1);
-            
+
             //--------------------
             // Read response text
             //--------------------
-            InputStream input = connection.getInputStream();
-            if ("gzip".equals(connection.getContentEncoding())) {
-                input = new GZIPInputStream(input);
-            }
-
-            StringBuilder response;
-            try (BufferedReader reader
-                    = new BufferedReader(new InputStreamReader(input, CHARSET))) {
-                String line;
-                response = new StringBuilder();
-                while ((line = reader.readLine()) != null) {
-                    response.append(line);
-                }
-            }
-            responseText = response.toString();
+            InputStream input = checkGZIP(connection.getInputStream(), connection);
+            responseText = readText(input);
         } catch (SocketTimeoutException ex) {
             requestError = ex.toString();
         } catch (IOException ex) {
@@ -171,6 +264,10 @@ public class Request implements Runnable {
         } finally {
             if (connection != null) {
                 try {
+                    InputStream errorInput = checkGZIP(connection.getErrorStream(), connection);
+                    if (errorInput != null) {
+                        errorText = readText(errorInput);
+                    }
                     responseCode = connection.getResponseCode();
                 } catch (IOException ex) {
                     // Do nothing, responseCode will simply be -1
@@ -182,7 +279,7 @@ public class Request implements Runnable {
         //-----------------------
         // Debug output / Output
         //-----------------------
-        LOGGER.info(String.format("GOT (%d/%d, %d%s): %s%s",
+        LOGGER.info(String.format(Locale.ROOT, "GOT (%d/%d, %d%s): %s%s",
                 responseCode,
                 ratelimitRemaining,
                 responseText != null ? responseText.length() : -1,
@@ -190,9 +287,29 @@ public class Request implements Runnable {
                 url,
                 requestError != null ? " ["+requestError+"]" : ""));
         
-        listener.requestResult(responseText, responseCode, ratelimitRemaining);
+        listener.requestResult(responseText, responseCode, errorText, ratelimitRemaining);
     }
-
+    
+    private static InputStream checkGZIP(InputStream input, HttpURLConnection connection) throws IOException {
+        if (input != null && "gzip".equals(connection.getContentEncoding())) {
+            return new GZIPInputStream(input);
+        }
+        return input;
+    }
+    
+    private static String readText(InputStream input) throws IOException {
+        StringBuilder response;
+        try ( BufferedReader reader
+                = new BufferedReader(new InputStreamReader(input, CHARSET))) {
+            String line;
+            response = new StringBuilder();
+            while ((line = reader.readLine()) != null) {
+                response.append(line);
+            }
+        }
+        return response.toString();
+    }
+    
     @Override
     public boolean equals(Object obj) {
         if (obj == null) {
@@ -229,6 +346,11 @@ public class Request implements Runnable {
         hash = 37 * hash + Objects.hashCode(this.requestMethod);
         hash = 37 * hash + Objects.hashCode(this.contentType);
         return hash;
+    }
+    
+    @Override
+    public String toString() {
+        return url;
     }
     
 }

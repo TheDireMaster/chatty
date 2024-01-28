@@ -3,8 +3,10 @@ package chatty.gui;
 
 import chatty.Helper;
 import chatty.gui.components.textpane.ChannelTextPane;
+import chatty.gui.laf.LaF;
 import chatty.util.Debugging;
 import chatty.util.MiscUtil;
+import chatty.util.Pair;
 import chatty.util.ProcessManager;
 import chatty.util.StringUtil;
 import chatty.util.commands.CustomCommand;
@@ -29,22 +31,22 @@ import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
 import java.beans.PropertyChangeEvent;
 import java.beans.PropertyVetoException;
 import java.beans.VetoableChangeListener;
-import java.net.MalformedURLException;
-import java.net.URL;
 import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.StringTokenizer;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
 import javax.swing.AbstractAction;
+import javax.swing.AbstractButton;
 import javax.swing.Action;
 import javax.swing.Icon;
 import javax.swing.ImageIcon;
@@ -61,9 +63,14 @@ import javax.swing.JTable;
 import javax.swing.KeyStroke;
 import javax.swing.RowSorter;
 import javax.swing.SortOrder;
+import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 import javax.swing.WindowConstants;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
+import javax.swing.table.TableCellRenderer;
+import javax.swing.table.TableColumn;
 import javax.swing.text.AbstractDocument;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
@@ -82,7 +89,6 @@ public class GuiUtil {
     private static final Logger LOGGER = Logger.getLogger(GuiUtil.class.getName());
     
     public final static Insets NORMAL_BUTTON_INSETS = new Insets(2, 14, 2, 14);
-    public final static Insets SMALL_BUTTON_INSETS = new Insets(-1, 10, -1, 10);
     public final static Insets SMALLER_BUTTON_INSETS = new Insets(0, 4, 0, 4);
     public final static Insets SPECIAL_BUTTON_INSETS = new Insets(2, 12, 2, 6);
     public final static Insets SPECIAL_SMALL_BUTTON_INSETS = new Insets(-1, 12, -1, 6);
@@ -90,6 +96,13 @@ public class GuiUtil {
     private static final String CLOSE_DIALOG_ACTION_MAP_KEY = "CLOSE_DIALOG_ACTION_MAP_KEY";
     private static final KeyStroke ESCAPE_STROKE = KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0);
     
+    public static void smallButtonInsets(AbstractButton button) {
+        button.setMargin(LaF.defaultButtonInsets() ? null : new Insets(-1, 10, -1, 10));
+    }
+    
+    public static void smallButtonInsetsSquare(AbstractButton button) {
+        button.setMargin(LaF.defaultButtonInsets() ? null : new Insets(0, 0, 0, 0));
+    }
     
     public static void installEscapeCloseOperation(final JDialog dialog) {
         Action closingAction = new AbstractAction() {
@@ -126,17 +139,7 @@ public class GuiUtil {
         JOptionPane p = new JOptionPane(message, messageType, optionType);
         p.setOptions(options);
         final JDialog d = p.createDialog(parent, title);
-        d.setAutoRequestFocus(false);
-        d.setFocusableWindowState(false);
-        // Make focusable after showing the dialog, so that it can be focused
-        // by the user, but doesn't steal focus from the user when it opens.
-        SwingUtilities.invokeLater(new Runnable() {
-
-            @Override
-            public void run() {
-                d.setFocusableWindowState(true);
-            }
-        });
+        setNonAutoFocus(d);
         d.setVisible(true);
         // Find index of result
         Object value = p.getValue();
@@ -146,6 +149,22 @@ public class GuiUtil {
             }
         }
         return -1;
+    }
+    
+    /**
+     * Configure the given window to not take focus immediately. It will be
+     * able to take focus afterwards.
+     * 
+     * @param w 
+     */
+    public static void setNonAutoFocus(Window w) {
+        w.setAutoRequestFocus(false);
+        w.setFocusableWindowState(false);
+        // Make focusable after showing the dialog, so that it can be focused
+        // by the user, but doesn't steal focus from the user when it opens.
+        SwingUtilities.invokeLater(() -> {
+            w.setFocusableWindowState(true);
+        });
     }
     
     public static void showNonModalMessage(Component parent, String title, String message, int type) {
@@ -357,18 +376,10 @@ public class GuiUtil {
                 dialog.setLocationRelativeTo(null);
                 dialog.setVisible(true);
                 JButton button = new JButton("Shake");
-                ImageIcon a = new ImageIcon(new URL("https://cdn.betterttv.net/emote/58487cc6f52be01a7ee5f205/1x"));
-                ImageIcon b = new ImageIcon(new URL("https://static-cdn.jtvnw.net/emoticons/v1/123171/1.0"));
                 button.addActionListener(e -> shake(dialog, 2, 2));
                 dialog.add(button, BorderLayout.NORTH);
-                LinkedHashMap<ImageIcon, Integer> map = new LinkedHashMap<>();
-                map.put(b, 0);
-                map.put(a, -8);
-                Debugging.command("overlayframe");
-                dialog.add(new JLabel("text", overlay(map), 0), BorderLayout.CENTER);
                 dialog.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
-            }
-            catch (MalformedURLException ex) {
+            } catch (Exception ex) {
                 Logger.getLogger(GuiUtil.class.getName()).log(Level.SEVERE, null, ex);
             }
         });
@@ -567,7 +578,7 @@ public class GuiUtil {
             return "Error: "+command.getSingleLineError();
         } else {
             String resultCommand = command.replace(param);
-            ProcessManager.execute(resultCommand, "Notification");
+            ProcessManager.execute(resultCommand, "Notification", null);
             return "Running: "+resultCommand;
         }
     }
@@ -659,19 +670,48 @@ public class GuiUtil {
      * Note that this replaces an already set DocumentFilter.
      * 
      * @param comp The JTextComponent, using AbstractDocument
-     * @param limit The character limit
+     * @param defaultLimit The character limit (a limit <= 0 means no limit)
      * @param allowNewlines false to filter linebreak characters
+     * @param limitArray Optional additional limits, that overwrite the default
+     * limit, can be specified as key/value pairs. The key (String) must be a
+     * regex that if it matches causes the value (Integer) to be used as limit.
+     * When several additional limits are provided, the first one that matches
+     * is used. For example, when the first letter in the text component is a
+     * "/" use the limit 5000: {@code ...(comp, 500, false, "^/", 5000)}
      */
-    public static void installLengthLimitDocumentFilter(JTextComponent comp, int limit, boolean allowNewlines) {
-        if (limit < 0) {
-            throw new IllegalArgumentException("Invalid limit < 0");
+    public static void installLengthLimitDocumentFilter(JTextComponent comp, int defaultLimit, boolean allowNewlines, Object... limitArray) {
+        List<Pair<Pattern, Integer>> limits = new ArrayList<>();
+        for (int i = 0; i + 1 < limitArray.length; i += 2) {
+            Object patternObject = limitArray[i];
+            Object limitObject = limitArray[i+1];
+            Pattern pattern = null;
+            int limit = -1;
+            if (patternObject instanceof String) {
+                pattern = Pattern.compile((String) patternObject);
+            }
+            if (limitObject instanceof Integer) {
+                limit = (Integer) limitObject;
+            }
+            limits.add(new Pair<>(pattern, limit));
         }
+        
         DocumentFilter filter = new DocumentFilter() {
             
             @Override
             public void replace(DocumentFilter.FilterBypass fb, int offset,
                     int delLength, String text, AttributeSet attrs) throws BadLocationException {
-                if (text == null || text.isEmpty()) {
+                String fullText = fb.getDocument().getText(0, offset)
+                        + text
+                        + fb.getDocument().getText(offset + delLength, fb.getDocument().getLength() - offset - delLength);
+                int limit = defaultLimit;
+                for (Pair<Pattern, Integer> limitEntry : limits) {
+                    if (limitEntry.key != null
+                            && limitEntry.key.matcher(fullText).find()) {
+                        limit = limitEntry.value;
+                        break;
+                    }
+                }
+                if (text == null || text.isEmpty() || limit <= 0) {
                     super.replace(fb, offset, delLength, text, attrs);
                 } else {
                     int currentLength = fb.getDocument().getLength();
@@ -704,6 +744,28 @@ public class GuiUtil {
         }
     }
     
+    public static JLabel createInputLenghtLabel(JTextComponent comp, int max) {
+        JLabel label = new JLabel() {
+            
+            @Override
+            public Dimension getPreferredSize() {
+                int width = getFontMetrics(getFont()).stringWidth(max+"/"+max);
+                Dimension d = super.getPreferredSize();
+                return new Dimension(Math.max(d.width, width), d.height);
+            }
+            
+        };
+        label.setHorizontalAlignment(SwingConstants.CENTER);
+        Runnable action = () -> label.setText(String.format("%d/%d", comp.getText().length(), max));
+        GuiUtil.addChangeListener(comp.getDocument(), e -> {
+            // Set value after change
+            action.run();
+        });
+        // Set initial value
+        action.run();
+        return label;
+    }
+    
     /**
      * Set the height of the target component to the height of the source
      * component, by using preferred size.
@@ -730,8 +792,27 @@ public class GuiUtil {
         return new ImageIcon(img.getScaledInstance(w, h, Image.SCALE_SMOOTH));
     }
     
+    /**
+     * If the given icon is null, load icon with the given name instead.
+     * 
+     * @param icon The icon
+     * @param c Load the fallback icon relative to this class
+     * @param name The file name in the JAR
+     * @return The given icon, or the fallback icon loaded from the JAR
+     */
+    public static Icon getFallbackIcon(Icon icon, Class c, String name) {
+        if (icon == null) {
+            return getIcon(c, name);
+        }
+        return icon;
+    }
+    
     public static ImageIcon getIcon(Object o, String name) {
-        return new ImageIcon(Toolkit.getDefaultToolkit().createImage(o.getClass().getResource(name)));
+        return getIcon(o.getClass(), name);
+    }
+    
+    public static ImageIcon getIcon(Class c, String name) {
+        return new ImageIcon(Toolkit.getDefaultToolkit().createImage(c.getResource(name)));
     }
     
     /**
@@ -758,56 +839,34 @@ public class GuiUtil {
         return new ImageIcon(res);
     }
     
-    public static ImageIcon overlay(LinkedHashMap<ImageIcon, Integer> overlay) {
-        if (overlay == null || overlay.isEmpty()) {
-            return null;
-        }
-        if (overlay.size() == 1) {
-            return overlay.entrySet().iterator().next().getKey();
-        }
-        ImageIcon base = null;
-        int width = 0;
-        int height = 0;
-        int oh = 0;
-        Iterator<Map.Entry<ImageIcon, Integer>> it = overlay.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<ImageIcon, Integer> entry = it.next();
-            ImageIcon icon = entry.getKey();
-            if (base == null) {
-                base = entry.getKey();
-            }
-            width = Integer.max(width, icon.getIconWidth());
-            height = Integer.max(height, icon.getIconHeight());
-            int offset = Math.abs((int)(entry.getValue()/100.0*icon.getIconHeight()));
-            int inclOffset = icon.getIconHeight()+offset;
-            if (inclOffset > height) {
-                oh += inclOffset - height;
-                height = inclOffset;
-            }
-        }
-        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+    public static ImageIcon substituteColor(ImageIcon icon, Color search, Color target) {
+        BufferedImage img = new BufferedImage(icon.getIconWidth(), icon.getIconHeight(), BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
-        Iterator<Map.Entry<ImageIcon, Integer>> it2 = overlay.entrySet().iterator();
-        while (it2.hasNext()) {
-            Map.Entry<ImageIcon, Integer> entry = it2.next();
-            ImageIcon icon = entry.getKey();
-            int offset = (int)(entry.getValue()/100.0*icon.getIconHeight());
-            g.drawImage(icon.getImage(),
-                    (width - icon.getIconWidth()) / 2,
-                    (height - icon.getIconHeight()) / 2 + offset + oh,
-                    null);
-        }
-        if (Debugging.isEnabled("overlayframe")) {
-            g.setColor(Color.BLACK);
-            g.drawRect(0, 0, width - 1, height - 1);
-        }
+        g.drawImage(icon.getImage(), 0, 0, null);
         g.dispose();
+        substituteColor(img, search, target);
         return new ImageIcon(img);
+    }
+    
+    public static void substituteColor(BufferedImage img, Color search, Color target) {
+        int RGB_MASK = 0x00ffffff;
+        int ALPHA_MASK = 0xff000000;
+        
+        int searchRGB = search.getRed() << 16 | search.getGreen() << 8 | search.getBlue();
+        int targetRGB = target.getRed() << 16 | target.getGreen() << 8 | target.getBlue();
+        
+        int[] rgb = img.getRGB(0, 0, img.getWidth(), img.getHeight(), null, 0, img.getWidth());
+        for (int i=0; i<rgb.length; i++) {
+            if ((rgb[i] & RGB_MASK) == searchRGB) {
+                rgb[i] = (rgb[i] & ALPHA_MASK) | targetRGB;
+            }
+        }
+        img.setRGB(0, 0, img.getWidth(), img.getHeight(), rgb, 0, img.getWidth());
     }
     
     /**
      * Run in the EDT, either by running it directly if already in the EDT or
-     * by using SwingUtilities.invokeAndWait.
+     * by using {@link SwingUtilities#invokeAndWait(Runnable)}.
      * 
      * @param runnable What to execute
      * @param description Used for logging when an error occurs
@@ -824,6 +883,114 @@ public class GuiUtil {
                 LOGGER.warning("Failed to execute edtAndWait ("+description+"): "+ex);
             }
         }
+    }
+    
+    /**
+     * Run in the EDT, either by running it directly if already in the EDT or
+     * by using {@link SwingUtilities#invokeLater(Runnable)}.
+     * 
+     * @param runnable 
+     */
+    public static void edt(Runnable runnable) {
+        if (SwingUtilities.isEventDispatchThread()) {
+            runnable.run();
+        }
+        else {
+            SwingUtilities.invokeLater(runnable);
+        }
+    }
+    
+    /**
+     * Get notified of any text changes in the document.
+     * 
+     * @param doc
+     * @param listener 
+     */
+    public static void addChangeListener(Document doc, Consumer<DocumentEvent> listener) {
+        doc.addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                listener.accept(e);
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                listener.accept(e);
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                listener.accept(e);
+            }
+        });
+    }
+    
+    public static void addSimpleMouseListener(JComponent component, SimpleMouseListener listener) {
+        component.addMouseListener(new MouseAdapter() {
+
+            boolean inside = false;
+
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.isPopupTrigger()) {
+                    listener.contextMenu(e);
+                }
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (inside) {
+                    listener.mouseClicked(e);
+                }
+                if (e.isPopupTrigger()) {
+                    listener.contextMenu(e);
+                }
+            }
+
+            @Override
+            public void mouseEntered(MouseEvent e) {
+                inside = true;
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                inside = false;
+            }
+        });
+    }
+    
+    public static abstract class SimpleMouseListener {
+
+        public void mouseClicked(MouseEvent e) {
+        }
+
+        public void contextMenu(MouseEvent e) {
+        }
+
+    }
+    
+    public static int getTableColumnHeaderWidth(JTable table, int column) {
+        TableColumn tableColumn = table.getColumnModel().getColumn(column);
+        Object value = tableColumn.getHeaderValue();
+        TableCellRenderer renderer = tableColumn.getHeaderRenderer();
+
+        if (renderer == null) {
+            renderer = table.getTableHeader().getDefaultRenderer();
+        }
+
+        Component c = renderer.getTableCellRendererComponent(table, value, false, false, -1, column);
+        return c.getPreferredSize().width;
+    }
+    
+    public static void packKeepCenter(Window window) {
+        Dimension size = window.getSize();
+        window.pack();
+        Point location = window.getLocation();
+        location.translate(
+                (size.width - window.getWidth()) / 2,
+                (size.height - window.getHeight()) / 2
+        );
+        window.setLocation(location);
     }
     
 }

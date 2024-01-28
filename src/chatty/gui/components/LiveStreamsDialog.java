@@ -4,20 +4,34 @@ package chatty.gui.components;
 import chatty.ChannelFavorites;
 import chatty.Chatty;
 import chatty.Helper;
+import chatty.Room;
+import chatty.gui.DockedDialogHelper;
+import chatty.gui.DockedDialogManager;
 import chatty.gui.GuiUtil;
+import chatty.gui.MainGui;
+import chatty.gui.TwitchUrl;
 import chatty.gui.components.LiveStreamsList.ListDataChangedListener;
+import chatty.gui.components.menus.CommandActionEvent;
 import chatty.gui.components.menus.ContextMenuAdapter;
 import chatty.gui.components.menus.ContextMenuListener;
+import chatty.gui.components.settings.CommandSettings;
 import chatty.lang.Language;
 import chatty.util.api.StreamInfo;
+import chatty.util.commands.CustomCommand;
+import chatty.util.dnd.DockContent;
+import chatty.util.dnd.DockContentContainer;
 import chatty.util.settings.Settings;
 import java.awt.CardLayout;
+import java.awt.Component;
 import java.awt.Dimension;
+import java.awt.Window;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.function.Function;
 import javax.swing.JFrame;
+import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.ScrollPaneConstants;
 
@@ -76,9 +90,51 @@ public class LiveStreamsDialog extends JFrame {
         }
     }
     
+    public enum OpenAction {
+    
+        INFO("info"),
+        JOIN("join"),
+        STREAM("stream"),
+        STREAM_POPOUT("streamPopout"),
+        COMMAND("command");
+        
+        public final String key;
+        
+        OpenAction(String key) {
+            this.key = key;
+        }
+        
+        /**
+         * Get the label as defined in the localization file.
+         * 
+         * @return The string
+         */
+        public String getLabel() {
+            return Language.getString("streams.openAction."+key);
+        }
+        
+        /**
+         * Get the tooltip text as defined in the localization file, or null if
+         * none exists.
+         * 
+         * @return The string (or null if none exists)
+         */
+        public String getToolTipText() {
+            return Language.getString("streams.openAction."+key+".tip", false);
+        }
+        
+        public static OpenAction fromKey(String key) {
+            for (OpenAction s : OpenAction.values()) {
+                if (s.key.equals(key)) {
+                    return s;
+                }
+            }
+            return null;
+        }
+    }
+    
     
     private final ChannelInfoDialog channelInfo;
-    private static final String BASE_TITLE = "Live Streams";
     
     private final JScrollPane scroll;
     private final LiveStreamsList list;
@@ -90,18 +146,37 @@ public class LiveStreamsDialog extends JFrame {
     
     private boolean liveStreamListSelected = true;
     
-    public LiveStreamsDialog(ContextMenuListener listener,
-            ChannelFavorites favs, Settings settings) {
+    private final DockedDialogHelper helper;
+    private final ContextMenuListener listener;
+    private final Settings settings;
+    
+    public LiveStreamsDialog(MainGui g, ContextMenuListener listener,
+            ChannelFavorites favs, Settings settings,
+            DockedDialogManager dockedDialogs) {
         
         setTitle("Live Streams");
         setPreferredSize(new Dimension(280,350));
         
+        this.listener = listener;
+        this.settings = settings;
+        
         ContextMenuListener localCml = new MyContextMenuListener();
         LiveStreamListener localLiveStreamListener = new LiveStreamListener() {
 
+            /**
+             * Actions other than INFO support several streams. One command is
+             * dispatched as a CommandActionEvent with all selected streams.
+             * This allows the command to either handle several streams at once
+             * (e.g. joining) or handle each streams separately (opening URL).
+             * 
+             * @param streams 
+             */
             @Override
-            public void liveStreamClicked(StreamInfo stream) {
-                openChannelInfoDialog(stream);
+            public void liveStreamClicked(Collection<StreamInfo> streams) {
+                if (streams.isEmpty()) {
+                    return;
+                }
+                handleStreamsAction(streams, false);
             }
         };
         // Create list
@@ -168,20 +243,86 @@ public class LiveStreamsDialog extends JFrame {
         
         
         
-        channelInfo = new ChannelInfoDialog(this);
+        channelInfo = new ChannelInfoDialog(this, null);
         GuiUtil.installEscapeCloseOperation(channelInfo);
         channelInfo.addContextMenuListener(listener);
         
         // Add to dialog
         cardLayout = new CardLayout();
-        setLayout(cardLayout);
+        JPanel mainPanel = new JPanel(cardLayout);
         scroll = new JScrollPane(list);
         scroll.getVerticalScrollBar().setUnitIncrement(20);
         scroll.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_ALWAYS);
-        add(scroll);
-        add(removedList);
+        mainPanel.add(scroll);
+        mainPanel.add(removedList);
+        add(mainPanel);
         pack();
-    };
+        
+        DockContent content = new DockContentContainer("Live", mainPanel, dockedDialogs.getDockManager());
+        content.setId("-liveStreams-");
+        helper = dockedDialogs.createHelper(new DockedDialogHelper.DockedDialog() {
+            @Override
+            public void setVisible(boolean visible) {
+                LiveStreamsDialog.super.setVisible(visible);
+            }
+
+            @Override
+            public boolean isVisible() {
+                return LiveStreamsDialog.super.isVisible();
+            }
+
+            @Override
+            public void addComponent(Component comp) {
+                add(comp);
+            }
+
+            @Override
+            public void removeComponent(Component comp) {
+                remove(comp);
+            }
+
+            @Override
+            public Window getWindow() {
+                return LiveStreamsDialog.this;
+            }
+
+            @Override
+            public DockContent getContent() {
+                return content;
+            }
+        });
+        list.setDockedDialogHelper(helper);
+    }
+    
+    public boolean isDocked() {
+        if (helper != null) {
+            return helper.isDocked();
+        }
+        return false;
+    }
+    
+    @Override
+    public void setVisible(boolean visible) {
+        helper.setVisible(visible, true);
+    }
+    
+    @Override
+    public boolean isVisible() {
+        if (helper != null) {
+            return helper.isVisible();
+        }
+        else {
+            return super.isVisible();
+        }
+    }
+    
+    @Override
+    public void setTitle(String title) {
+        super.setTitle(title);
+        if (helper != null) {
+            helper.getContent().setLongTitle(title);
+        }
+    }
     
     /**
      * Adds the given stream info to the list, if valid and online, or sets
@@ -206,6 +347,11 @@ public class LiveStreamsDialog extends JFrame {
         }
     }
     
+    public void setFiltering(boolean favsOnly) {
+        list.setFiltering(favsOnly);
+        updateTitle();
+    }
+    
     public void setHistoryRange(int range) {
         channelInfo.setHistoryRange(range);
     }
@@ -228,8 +374,10 @@ public class LiveStreamsDialog extends JFrame {
     
     private void updateTitle() {
         if (liveStreamListSelected) {
+            int shown = list.getModel().getSize();
+            int total = ((SortedListModel)list.getModel()).getTotalSize();
             setTitle(Language.getString("streams.title",
-                    list.getModel().getSize(),
+                    shown == total ? shown : shown+"/"+total,
                     titleSorting));
         } else {
             setTitle(Language.getString("streams.removed.title"));
@@ -254,12 +402,13 @@ public class LiveStreamsDialog extends JFrame {
             } else if (cmd.equals("showRemovedList")) {
                 switchList();
             }
+            helper.menuAction(e);
         }
     }
     
     private void openChannelInfoDialog(StreamInfo info) {
         if (!channelInfo.isVisible()) {
-            channelInfo.setLocationRelativeTo(LiveStreamsDialog.this);
+            channelInfo.setLocationRelativeTo(helper.getContent().getComponent());
         }
         channelInfo.set(info);
         channelInfo.setVisible(true);
@@ -268,7 +417,64 @@ public class LiveStreamsDialog extends JFrame {
     private void switchList() {
         liveStreamListSelected = !liveStreamListSelected;
         updateTitle();
-        cardLayout.next(getContentPane());
+        cardLayout.next(helper.getContent().getComponent());
+    }
+    
+    /**
+     * Handle streams action based on the liveStreams settings.
+     * 
+     * @param streams
+     * @param external Must be set to true if this is not triggered out of the
+     * Live Streams List
+     */
+    public void handleStreamsAction(Collection<StreamInfo> streams, boolean external) {
+        Function<String, String> makeOpenCommand = url -> "/chain /foreach $fs($1-) > /openUrl " + url + " | /join $replace($1-, ,\\,)";
+        switch (OpenAction.fromKey(settings.getString("liveStreamsAction"))) {
+            case INFO:
+                if (!external) {
+                    /**
+                     * Only open the Live Streams List specific Channel Info
+                     * Dialog when opened out of the Live Streams List.
+                     */
+                    openChannelInfoDialog(streams.iterator().next());
+                }
+                else {
+                    CustomCommand command = CustomCommand.parse("/join $replace($1-, ,\\,)");
+                    CommandActionEvent e = new CommandActionEvent(new ActionEvent(this, ActionEvent.ACTION_FIRST, "command"), command);
+                    listener.streamInfosMenuItemClicked(e, streams);
+                }
+                break;
+            case JOIN: {
+                CustomCommand command = CustomCommand.parse("/join $replace($1-, ,\\,)");
+                CommandActionEvent e = new CommandActionEvent(new ActionEvent(this, ActionEvent.ACTION_FIRST, "command"), command);
+                listener.streamInfosMenuItemClicked(e, streams);
+            }
+            break;
+            case STREAM: {
+                CustomCommand command = CustomCommand.parse(makeOpenCommand.apply(TwitchUrl.makeTwitchStreamUrl("\\$1")));
+                CommandActionEvent e = new CommandActionEvent(new ActionEvent(this, ActionEvent.ACTION_FIRST, "command"), command);
+                listener.streamInfosMenuItemClicked(e, streams);
+            }
+            break;
+            case STREAM_POPOUT: {
+                CustomCommand command = CustomCommand.parse(makeOpenCommand.apply(TwitchUrl.makeTwitchPlayerUrl("\\$1")));
+                CommandActionEvent e = new CommandActionEvent(new ActionEvent(this, ActionEvent.ACTION_FIRST, "command"), command);
+                listener.streamInfosMenuItemClicked(e, streams);
+            }
+            break;
+            case COMMAND: {
+                String commandValue = settings.getString("liveStreamsCommand");
+                CustomCommand customCommand = CustomCommand.parse(commandValue.trim());
+                if (customCommand.hasError()) {
+                    CommandSettings.showCommandInfoPopup(scroll, customCommand);
+                }
+                else {
+                    CommandActionEvent e = new CommandActionEvent(new ActionEvent(this, ActionEvent.ACTION_FIRST, "command"), customCommand);
+                    listener.streamInfosMenuItemClicked(e, streams);
+                }
+            }
+            break;
+        }
     }
     
     /**

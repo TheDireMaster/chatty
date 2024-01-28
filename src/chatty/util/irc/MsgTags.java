@@ -1,6 +1,8 @@
 
 package chatty.util.irc;
 
+import chatty.util.StringUtil;
+import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -38,15 +40,39 @@ public class MsgTags extends IrcMsgTags {
     }
     
     public boolean isCustomReward() {
-        return containsKey("custom-reward-id");
+        return hasValue("custom-reward-id");
     }
-    
+
     public String getCustomRewardId() {
         return get("custom-reward-id");
     }
     
     public boolean isFromPubSub() {
         return isValue("chatty-source", "pubsub");
+    }
+
+    public boolean isHistoricMsg() {
+        return hasValue("historic-timestamp");
+    }
+
+    public long getHistoricTimeStamp() {
+        if (isHistoricMsg()) {
+            return Long.parseLong(get("historic-timestamp"));
+        } else {
+            return -1;
+        }
+    }
+    
+    public String getChannelJoin() {
+        return get("chatty-channel-join");
+    }
+    
+    public String getChannelJoinIndices() {
+        return get("chatty-channel-join-indices");
+    }
+    
+    public boolean isRestrictedMessage() {
+        return isValue("chatty-is-restricted", "1");
     }
     
     public boolean hasReplyUserMsg() {
@@ -68,6 +94,24 @@ public class MsgTags extends IrcMsgTags {
     
     public String getReplyParentMsgId() {
         return get("reply-parent-msg-id");
+    }
+    
+    public String getHypeChatAmountText() {
+        int amount = getInteger("pinned-chat-paid-amount", -1);
+        String currency = get("pinned-chat-paid-currency");
+        int exponent = getInteger("pinned-chat-paid-exponent", -1);
+        if (amount > 0 && !StringUtil.isNullOrEmpty(currency) && exponent != -1) {
+            return String.format("%s %s",
+                    currency,
+                    new BigDecimal(amount).scaleByPowerOfTen(-exponent));
+        }
+        return null;
+    }
+    
+    public String getHypeChatInfo() {
+        return String.format("Level %s Hype Chat for %s",
+                get("pinned-chat-paid-level"),
+                getHypeChatAmountText());
     }
     
     //================
@@ -110,6 +154,22 @@ public class MsgTags extends IrcMsgTags {
         Map<String, String> result = new HashMap<>();
         b.fill(result);
         a.fill(result);
+        return new MsgTags(result);
+    }
+    
+    /**
+     * Creates a new MsgTags object with the given key/value pair added. If a key with the given
+     * name already exists, it's value is overwritten.
+     * 
+     * @param a The original MsgTags object
+     * @param key The key to be added
+     * @param value The value to be added
+     * @return A new MsgTags object
+     */
+    public static MsgTags addTag(MsgTags a, String key, String value) {
+        Map<String, String> result = new HashMap<>();
+        a.fill(result);
+        result.put(key, value);
         return new MsgTags(result);
     }
     

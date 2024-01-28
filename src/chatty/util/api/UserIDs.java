@@ -66,7 +66,7 @@ public class UserIDs {
      * @param usernames 
      */
     public void waitForUserIDs(UserIdResultListener result, String... usernames) {
-        Collection names = prepareNames(usernames);
+        Collection<String> names = prepareNames(usernames);
         addRequest(result, names, true);
         checkDoneRequests(true);
         checkRequest();
@@ -82,7 +82,7 @@ public class UserIDs {
      * @param usernames 
      */
     public void getUserIDsAsap(UserIdResultListener result, String... usernames) {
-        Collection names = prepareNames(usernames);
+        Collection<String> names = prepareNames(usernames);
         addRequest(result, names, false);
         checkDoneRequests(true);
         performRequest();
@@ -95,7 +95,7 @@ public class UserIDs {
      * @param usernames 
      */
     public void getUserIDs(UserIdResultListener result, String... usernames) {
-        Collection names = prepareNames(usernames);
+        Collection<String> names = prepareNames(usernames);
         getUserIDs(result, names);
     }
     
@@ -143,11 +143,10 @@ public class UserIDs {
         data.setId(StringUtil.toLowerCase(name), id);
     }
     
-    public void handleRequestResult(Set<String> requestedNames, String text) {
+    public void handleRequestResult(Set<String> requestedNames, Map<String, String> result) {
         synchronized(this) {
             requestPending.removeAll(requestedNames);
             
-            Map<String, String> result = parseResult(text);
             if (result == null) {
                 requestedNames.stream().forEach(n -> data.setError(n));
                 errors++;
